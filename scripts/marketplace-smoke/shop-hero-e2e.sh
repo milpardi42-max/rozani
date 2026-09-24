@@ -9,7 +9,8 @@
 #   1. the boutique panel: the shop eyebrow, the collection's title, its copy
 #      and the two doors into the catalogue (`?owner=site` / `?owner=artist`);
 #   2. the live numbers, recomputed here from the real store (`DATA=…`) — so the
-#      hero can never drift from the catalogue it describes;
+#      hero can never drift from the catalogue it describes (site products plus
+#      the artists' published works from `mk-assets.json`);
 #   3. the product mosaic: a lead piece with its family, maker, SKU and price, a
 #      second piece, and the lead's colourways with their swatches;
 #   4. the family rail: all eight families as `?family=<slug>` links, with the
@@ -66,11 +67,18 @@ def section(title):
 # ── the catalogue, straight from the store the server is using ───────────────
 content = json.loads(open(os.path.join(DATA, "content.json"), encoding="utf-8").read())["data"]
 products = content["products"]
+# published artist works are listed in the shop too (approved + public + an enabled licence)
+assets_path = os.path.join(DATA, "mk-assets.json")
+assets = json.loads(open(assets_path, encoding="utf-8").read()) if os.path.exists(assets_path) else []
+if isinstance(assets, dict):
+    assets = assets.get("data", [])
+works = [a for a in assets if a.get("status") == "approved" and a.get("visibility") == "public"
+         and any(t.get("enabled") for t in a.get("tiers", []))]
 counts = {
-    "products": len(products),
-    "families": len({p["familyId"] for p in products if p.get("familyId")}),
-    "colourways": sum(len(p.get("colors", [])) for p in products),
-    "makers": len({p["artistId"] for p in products if p.get("artistId")}),
+    "products": len(products) + len(works),
+    "families": len({p["familyId"] for p in products if p.get("familyId")} | {w["familyId"] for w in works if w.get("familyId")}),
+    "colourways": sum(len(p.get("colors", [])) for p in products) + sum(max(1, len(w.get("colourways") or [])) for w in works),
+    "makers": len({p["artistId"] for p in products if p.get("artistId")} | {w["artistId"] for w in works if w.get("artistId")}),
 }
 print(f"shop-hero-e2e → {BASE}   (data: {DATA})")
 print(f"  catalogue: {counts}")
@@ -177,7 +185,7 @@ for locale, want in EXPECT.items():
         link = f'/{locale}/shop?family={slug}'
         check(link in rail and name in rail, f"«{name}» links to {link}")
     for slug, name_fa, name_en in FAMILIES:
-        n = len([p for p in products if p.get("familyId") == f"fam-{slug}"])
+        n = len([p for p in products if p.get("familyId") == f"fam-{slug}"]) + len([w for w in works if w.get("familyId") == f"fam-{slug}"])
         if not n:
             continue
         shown = str(n).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")) if locale == "fa" else str(n)

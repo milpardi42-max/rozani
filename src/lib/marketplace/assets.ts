@@ -4,13 +4,23 @@ import {
   DEFAULT_ARTIST_SHARE_PCT,
   MAX_MASTER_BYTES,
   MULTIPART_PART_SIZE,
-  MULTIPART_THRESHOLD_BYTES,
   acceptedMasterMime,
   defaultTiers,
+  multipartThresholdFor,
   storageProvider,
 } from "./config";
 import { KEYS, mutateCollection, readCollection, readDoc, writeDoc, nextSequence } from "./store";
-import { deleteObject, deliverableKey, derivedKey, masterKey, putBuffer, stagedMasterKey, stagingPrefix } from "./storage";
+import {
+  deleteObject,
+  deletePrefix,
+  deliverableKey,
+  derivedKey,
+  masterKey,
+  objectSize,
+  putBuffer,
+  stagedMasterKey,
+  stagingPrefix,
+} from "./storage";
 import { scanBuffer, sha256 } from "./scanner";
 import { WATERMARK_LINES, buildDerivatives, cornerTagFor, readImageSize, renderColourwayPreview } from "./media";
 import { detectFormat, formatById, formatStoredMime, minUploadBytes, verifyFileSignature, type ExportFormatId } from "./formats";
@@ -185,13 +195,34 @@ export async function deleteAsset(id: string, options: { deleteObjects?: boolean
     result: undefined,
   }));
 
-  if (options.deleteObjects !== false) {
-    await deleteObject(asset.master.key).catch(() => undefined);
-    for (const file of [...asset.derivatives, ...asset.mockups]) {
-      await deleteObject(file.key).catch(() => undefined);
-    }
-  }
+  if (options.deleteObjects !== false) await deleteAssetObjects(asset);
   return true;
+}
+
+/** Every stored object of a work: master, previews, mockups and each colourway's files. */
+export function assetObjectKeys(asset: Asset): string[] {
+  const keys = new Set<string>();
+  if (asset.master?.key) keys.add(asset.master.key);
+  if (asset.previewKey) keys.add(asset.previewKey);
+  if (asset.tileKey) keys.add(asset.tileKey);
+  for (const file of [...asset.derivatives, ...asset.mockups]) keys.add(file.key);
+  for (const colourway of asset.colourways ?? []) {
+    for (const file of colourway.files) keys.add(file.key);
+    if (colourway.previewKey) keys.add(colourway.previewKey);
+  }
+  return [...keys];
+}
+
+/**
+ * Removes a work's files from storage — including the colourway deliverables
+ * and colourway previews, which purging used to leave behind. Known keys are
+ * deleted one by one (works on S3 too); on the local backend the work's folders
+ * are then swept for anything unlisted (e.g. previews of replaced files).
+ */
+export async function deleteAssetObjects(asset: Asset): Promise<void> {
+  for (const key of assetObjectKeys(asset)) await deleteObject(key).catch(() => undefined);
+  await deletePrefix(`private/masters/${asset.id}`).catch(() => undefined);
+  await deletePrefix(`private/derived/${asset.id}`).catch(() => undefined);
 }
 
 export async function setAssetStatus(
@@ -289,6 +320,24 @@ export interface CreateSessionInput {
   colourway?: { name: Localized; hex: string } | null;
   /** Attach the finished file to an existing work (colourways 2..n). */
   attachToAssetId?: string | null;
+  /** Browser-computed SHA-256 of the whole file; the stored bytes must match it. */
+  sha256?: string | null;
+}
+
+/** `true` for a lowercase/uppercase 64-char hex digest. */
+export function isSha256Hex(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value);
+}
+
+/**
+ * An integrity failure: the bytes that arrived are not the bytes the browser
+ * announced. Nothing is ever stored or published past one of these.
+ */
+export function integrityError(
+  code: "size_mismatch" | "checksum_mismatch",
+  detail: { expected: number | string; received: number | string; partNumber?: number },
+) {
+  return Object.assign(new Error(code), { code, ...detail });
 }
 
 export async function createUploadSession(input: CreateSessionInput): Promise<UploadSession> {
@@ -303,7 +352,7 @@ export async function createUploadSession(input: CreateSessionInput): Promise<Up
 
   const id = newId("upl");
   const provider = storageProvider();
-  const multipart = sizeBytes >= MULTIPART_THRESHOLD_BYTES;
+  const multipart = sizeBytes >= multipartThresholdFor(provider);
   const session: UploadSession = {
     id,
     userId: input.userId,
@@ -318,6 +367,7 @@ export async function createUploadSession(input: CreateSessionInput): Promise<Up
     mode: multipart ? "multipart" : "single",
     partSize: MULTIPART_PART_SIZE,
     parts: [],
+    sha256: isSha256Hex(input.sha256) ? input.sha256.toLowerCase() : undefined,
     staging: multipart ? id : undefined,
     formatId: input.formatId,
     colourwayId: input.colourwayId,
@@ -362,18 +412,56 @@ export async function getOpenUploadSession(id: string, userId: string): Promise<
   return session;
 }
 
+const COMPLETION_CLAIM_TTL_MS = 10 * 60 * 1000;
+
+/** `true` while a request is completing this session (claims expire after 10 minutes). */
+export function isCompleting(session: Pick<UploadSession, "status" | "completingSince">): boolean {
+  if (session.status !== "open" || !session.completingSince) return false;
+  return Date.now() - Date.parse(session.completingSince) < COMPLETION_CLAIM_TTL_MS;
+}
+
+/**
+ * Atomically claims an open session for completion. `false` means another
+ * request is completing it right now — typically the browser retrying after a
+ * dropped connection while the first request is still being processed. The
+ * caller answers 409 `completing`; the browser waits and asks again, and then
+ * gets `already_completed` with the work id instead of a duplicate work.
+ */
+export async function claimUploadSession(id: string): Promise<boolean> {
+  return mutateCollection<UploadSession, boolean>(KEYS.uploads, (sessions) => {
+    const index = sessions.findIndex((session) => session.id === id);
+    if (index === -1 || sessions[index].status !== "open" || isCompleting(sessions[index])) return { result: false };
+    const next = sessions.slice();
+    next[index] = { ...sessions[index], completingSince: new Date().toISOString() };
+    return { next, result: true };
+  });
+}
+
+/** Drops a completion claim after a failed attempt so the session can be retried. */
+export async function releaseUploadSession(id: string): Promise<void> {
+  await mutateCollection<UploadSession, void>(KEYS.uploads, (sessions) => {
+    const index = sessions.findIndex((session) => session.id === id);
+    if (index === -1 || !sessions[index].completingSince) return { result: undefined };
+    const next = sessions.slice();
+    next[index] = { ...sessions[index], completingSince: undefined };
+    return { next, result: undefined };
+  });
+}
+
 /** Records a completed part (multipart) and returns the updated session. */
 export async function recordUploadPart(
   id: string,
   partNumber: number,
   bytes: number,
   etag: string,
+  sha256?: string,
 ): Promise<UploadSession | null> {
   return mutateCollection<UploadSession, UploadSession | null>(KEYS.uploads, (sessions) => {
     const index = sessions.findIndex((session) => session.id === id);
     if (index === -1) return { result: null };
     const session = sessions[index];
-    const parts = [...session.parts.filter((part) => part.partNumber !== partNumber), { partNumber, bytes, etag }].sort(
+    const record = sha256 ? { partNumber, bytes, etag, sha256 } : { partNumber, bytes, etag };
+    const parts = [...session.parts.filter((part) => part.partNumber !== partNumber), record].sort(
       (a, b) => a.partNumber - b.partNumber,
     );
     const updated: UploadSession = { ...session, parts };
@@ -381,6 +469,22 @@ export async function recordUploadPart(
     copy[index] = updated;
     return { next: copy, result: updated };
   });
+}
+
+/** Number of chunks a multipart session is split into. */
+export function sessionPartCount(session: Pick<UploadSession, "sizeBytes" | "partSize">): number {
+  return Math.max(1, Math.ceil(session.sizeBytes / session.partSize));
+}
+
+/**
+ * Exact byte length chunk `partNumber` must have: every chunk is `partSize`
+ * except the last one, which carries the remainder. Anything else means the
+ * chunk was cut short (or padded) on its way here.
+ */
+export function expectedPartBytes(session: Pick<UploadSession, "sizeBytes" | "partSize">, partNumber: number): number {
+  const total = sessionPartCount(session);
+  if (partNumber < total) return session.partSize;
+  return session.sizeBytes - (total - 1) * session.partSize;
 }
 
 export async function abortUploadSession(id: string): Promise<void> {
@@ -429,10 +533,18 @@ export async function completeUpload(
     ? deliverableKey(assetId, colourwayId, formatId, Date.now().toString(36), ext)
     : masterKey(assetId, ext);
 
+  /* Integrity first: the work is only ever built from exactly the bytes the
+     browser announced — never from a file that was cut short on the way. */
   let masterBuffer: Buffer;
   if (session.mode === "single") {
     if (!options.buffer) throw new Error("missing_body");
     masterBuffer = options.buffer;
+    if (masterBuffer.byteLength !== session.sizeBytes) {
+      throw integrityError("size_mismatch", { expected: session.sizeBytes, received: masterBuffer.byteLength });
+    }
+    if (session.sha256 && sha256(masterBuffer) !== session.sha256) {
+      throw integrityError("checksum_mismatch", { expected: session.sha256, received: sha256(masterBuffer) });
+    }
     await putBuffer(masterStoredKey, masterBuffer, formatStoredMime(formatId));
   } else {
     const { assembleParts, getBuffer: readObject } = await import("./storage");
@@ -440,8 +552,21 @@ export async function completeUpload(
       .map((part) => part.partNumber)
       .sort((a, b) => a - b);
     if (!partNumbers.length) throw new Error("no_parts");
+    /* Checked before assembling, which consumes the staged chunks. */
+    const announced = session.parts.reduce((sum, part) => sum + part.bytes, 0);
+    if (announced !== session.sizeBytes) {
+      throw integrityError("size_mismatch", { expected: session.sizeBytes, received: announced });
+    }
     await assembleParts(session.id, partNumbers, masterStoredKey, formatStoredMime(formatId));
     masterBuffer = await readObject(masterStoredKey);
+    if (masterBuffer.byteLength !== session.sizeBytes) {
+      await deleteObject(masterStoredKey).catch(() => undefined);
+      throw integrityError("size_mismatch", { expected: session.sizeBytes, received: masterBuffer.byteLength });
+    }
+    if (session.sha256 && sha256(masterBuffer) !== session.sha256) {
+      await deleteObject(masterStoredKey).catch(() => undefined);
+      throw integrityError("checksum_mismatch", { expected: session.sha256, received: sha256(masterBuffer) });
+    }
   }
 
   if (masterBuffer.byteLength < minUploadBytes(formatId)) {
@@ -507,6 +632,7 @@ export async function completeUpload(
         width: size?.width,
         height: size?.height,
         cover: formatId === "preview" || undefined,
+        scanStatus: scan.status,
         uploadedAt: new Date().toISOString(),
       },
     ],
@@ -556,8 +682,10 @@ export async function completeUpload(
       } satisfies SeamlessReport),
     scan,
     tiers: session.meta.tiers?.length ? session.meta.tiers : defaultTiers(),
-    status: scan.status === "suspicious" ? "pending_review" : "pending_review",
+    /* Private until `/upload/finalize` has verified the whole batch. */
+    status: "pending_review",
     visibility: "private",
+    uploadState: "uploading",
     review: {},
     stats: { views: 0, sales: 0, revenue: { fa: 0, en: 0 } },
     createdAt: new Date().toISOString(),
@@ -574,8 +702,6 @@ export async function completeUpload(
     result: undefined,
   }));
 
-  const fileCount = 1;
-  void fileCount;
   return { asset, scan, seamless: asset.seamless };
 }
 
@@ -632,6 +758,7 @@ export async function attachUploadToAsset(session: UploadSession, input: AttachI
     width: size?.width,
     height: size?.height,
     cover: input.formatId === "preview" || undefined,
+    scanStatus: input.scan.status,
     uploadedAt: now,
   };
 
@@ -688,9 +815,11 @@ export async function attachUploadToAsset(session: UploadSession, input: AttachI
             }
           : asset.master
         : asset.master,
-    /* A published work with new files must be reviewed again before it sells. */
+    /* A published work with new files must be reviewed again before it sells
+       (or re-published by `/upload/finalize` when auto-publishing is on). */
     status: asset.status === "approved" ? "pending_review" : asset.status,
     review: asset.status === "approved" ? { ...asset.review, filesUpdatedAt: now } : asset.review,
+    uploadState: "uploading",
     updatedAt: now,
   });
 
@@ -720,6 +849,147 @@ export function assetFormatSet(asset: Asset): Set<string> {
     for (const file of colourway.files) set.add(file.formatId);
   }
   return set;
+}
+
+/* ------------------------------------------------------------------ */
+/* Finalize — verify the whole batch, then apply the publishing policy */
+/* ------------------------------------------------------------------ */
+
+/** One file the browser believes it delivered for a work. */
+export interface FinalizeManifestEntry {
+  colourwayId: string;
+  formatId: string;
+  sizeBytes: number;
+  sha256?: string | null;
+}
+
+export interface FinalizeProblem {
+  colourwayId: string;
+  formatId: string;
+  /**
+   * missing           → the server never received this file
+   * size_mismatch     → it arrived with a different length
+   * checksum_mismatch → same length, different bytes
+   * object_missing    → the record exists but the stored object is gone/short
+   */
+  problem: "missing" | "size_mismatch" | "checksum_mismatch" | "object_missing";
+  expected?: number | string;
+  received?: number | string;
+}
+
+export type FinalizeReason =
+  /** policy: publish as soon as the upload is complete and verified */
+  | "auto_published"
+  /** review mode, but the seamless auto-approval applies */
+  | "auto_approved_seamless"
+  | "already_published"
+  /** review mode: waits for an admin */
+  | "review_required"
+  /** the scanner flagged a file — a human must look before anyone can buy it */
+  | "suspicious_file"
+  /** an admin approved it as a draft or hid it — never overridden */
+  | "hidden_by_admin"
+  | "rejected";
+
+export interface FinalizeResult {
+  asset: Asset;
+  published: boolean;
+  reason: FinalizeReason;
+  verified: { files: number; bytes: number };
+}
+
+/**
+ * The last step of an upload batch.
+ *
+ * `completeUpload` runs once per *file*, so a work with several colourways or
+ * formats is assembled over several requests and stays private meanwhile. Only
+ * here — once the browser has sent everything — is the batch compared with what
+ * the server really holds (every file present, byte-for-byte the announced
+ * length and checksum, the stored object intact). A single discrepancy throws
+ * `incomplete_upload` with the list of problems and the work stays private, so
+ * a half-uploaded work can never reach the shop.
+ *
+ * Then the publishing policy decides:
+ *   • `autoPublishUploads` (default)         → approved + public right away
+ *   • review mode + `autoApproveSeamless`    → public if the tile is seamless
+ *   • otherwise                              → stays in the admin review queue
+ * A file the scanner flagged always waits for an admin; rejected works and works
+ * an admin hid are never re-published.
+ */
+export async function finalizeWork(input: { assetId: string; manifest: FinalizeManifestEntry[] }): Promise<FinalizeResult> {
+  const asset = await getAsset(input.assetId);
+  if (!asset) throw new Error("asset_not_found");
+  if (asset.status === "sold_exclusive" || asset.status === "delisted") throw new Error("asset_locked");
+
+  const colourways = asset.colourways ?? [];
+  const problems: FinalizeProblem[] = [];
+  const verified = { files: 0, bytes: 0 };
+  for (const entry of input.manifest) {
+    const where = { colourwayId: entry.colourwayId, formatId: entry.formatId };
+    const file = colourways.find((item) => item.id === entry.colourwayId)?.files.find((item) => item.formatId === entry.formatId);
+    if (!file) {
+      problems.push({ ...where, problem: "missing" });
+      continue;
+    }
+    if (file.sizeBytes !== entry.sizeBytes) {
+      problems.push({ ...where, problem: "size_mismatch", expected: entry.sizeBytes, received: file.sizeBytes });
+      continue;
+    }
+    if (isSha256Hex(entry.sha256) && file.sha256 !== entry.sha256.toLowerCase()) {
+      problems.push({ ...where, problem: "checksum_mismatch", expected: entry.sha256.toLowerCase(), received: file.sha256 });
+      continue;
+    }
+    const stored = await objectSize(file.key).catch(() => 0);
+    if (stored !== file.sizeBytes) {
+      problems.push({ ...where, problem: "object_missing", expected: file.sizeBytes, received: stored });
+      continue;
+    }
+    verified.files += 1;
+    verified.bytes += file.sizeBytes;
+  }
+  if (problems.length) throw Object.assign(new Error("incomplete_upload"), { problems, verified });
+
+  /* Every file is accounted for: the batch is complete whatever the policy says. */
+  const now = new Date().toISOString();
+  const complete: Asset = { ...asset, uploadState: "complete", uploadFinalizedAt: now };
+  const keep = async (reason: FinalizeReason, published = false): Promise<FinalizeResult> => ({
+    asset: await saveAsset(complete),
+    published,
+    reason,
+    verified,
+  });
+
+  if (asset.status === "rejected") return keep("rejected");
+  if (asset.status === "approved") return asset.visibility === "public" ? keep("already_published", true) : keep("hidden_by_admin");
+
+  const suspicious =
+    asset.scan?.status === "suspicious" || colourways.some((colourway) => colourway.files.some((file) => file.scanStatus === "suspicious"));
+  if (suspicious) return keep("suspicious_file");
+
+  const settings = await getSettings();
+  const seamless = asset.seamless?.verdict === "seamless";
+  const reason: FinalizeReason | null = settings.autoPublishUploads
+    ? "auto_published"
+    : settings.autoApproveSeamless && seamless
+      ? "auto_approved_seamless"
+      : null;
+  if (!reason) return keep("review_required");
+
+  const published = await saveAsset({
+    ...complete,
+    status: "approved",
+    visibility: "public",
+    rejectionNote: undefined,
+    review: {
+      ...asset.review,
+      reviewedBy: reason === "auto_published" ? "system:auto-publish" : "system:auto-approve-seamless",
+      reviewedAt: now,
+      note: reason === "auto_published" ? "published after a complete, verified upload" : "auto-approved: seamless tile",
+      /* the "back in the review queue" notice no longer applies */
+      filesUpdatedAt: undefined,
+    },
+  });
+  return { asset: published, published: true, reason, verified };
 }
 
 /* ------------------------------------------------------------------ */
@@ -754,6 +1024,13 @@ export interface MarketplaceSettings {
   affiliateDiscountPct: number;
   payoutMinimumFa: number;
   payoutMinimumEn: number;
+  /**
+   * Publish an artist's work the moment its upload is complete and verified
+   * (every file present, sizes and checksums matching). Off = every new work
+   * waits for an admin in the review queue. Admins can hide/reject either way.
+   */
+  autoPublishUploads: boolean;
+  /** In review mode, still publish works whose pattern tiles seamlessly. */
   autoApproveSeamless: boolean;
   emailOnSale: boolean;
 }
@@ -765,12 +1042,15 @@ const DEFAULT_SETTINGS: MarketplaceSettings = {
   affiliateDiscountPct: Number(process.env.MARKETPLACE_AFFILIATE_DISCOUNT_PCT ?? 10),
   payoutMinimumFa: Number(process.env.MARKETPLACE_MIN_PAYOUT_TOMAN ?? 500_000),
   payoutMinimumEn: Number(process.env.MARKETPLACE_MIN_PAYOUT_USD ?? 25),
+  autoPublishUploads: !/^(0|false|no|off)$/i.test((process.env.MARKETPLACE_AUTO_PUBLISH ?? "").trim()),
   autoApproveSeamless: false,
   emailOnSale: true,
 };
 
 export async function getSettings(): Promise<MarketplaceSettings> {
-  return readDoc<MarketplaceSettings>(KEYS.settings, DEFAULT_SETTINGS);
+  /* Merged over the defaults so settings saved before a key existed still get it. */
+  const stored = await readDoc<Partial<MarketplaceSettings>>(KEYS.settings, DEFAULT_SETTINGS);
+  return { ...DEFAULT_SETTINGS, ...stored };
 }
 
 export async function saveSettings(patch: Partial<MarketplaceSettings>): Promise<MarketplaceSettings> {

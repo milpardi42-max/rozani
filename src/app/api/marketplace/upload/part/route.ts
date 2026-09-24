@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { NextResponse } from "next/server";
-import { getOpenUploadSession, recordUploadPart } from "@/lib/marketplace/assets";
-import { objectExists, putBuffer, stagingPartKey } from "@/lib/marketplace/storage";
+import { expectedPartBytes, getOpenUploadSession, isSha256Hex, recordUploadPart, sessionPartCount } from "@/lib/marketplace/assets";
+import { objectSize, putBuffer, stagingPartKey } from "@/lib/marketplace/storage";
 import { fail, json, readJson, requireArtistOrAdmin } from "@/lib/marketplace/guard";
 import { clientIp, recordAttempt, tooManyAttempts } from "@/lib/rate-limit";
 
@@ -12,11 +12,16 @@ export const dynamic = "force-dynamic";
  *
  * Receives ONE chunk of a large master.
  *
- *   • multipart/form-data — `sessionId`, `partNumber`, `file` (local backend:
- *     the browser posts each chunk here, so nothing is buffered for longer than
- *     a single part).
+ *   • multipart/form-data — `sessionId`, `partNumber`, `file` and optionally
+ *     `sha256` (local backend: the browser posts each chunk here, so nothing is
+ *     buffered for longer than a single part).
  *   • application/json    — `{ sessionId, partNumber, bytes, etag }` to register
  *     a chunk the browser already PUT to a presigned S3 URL.
+ *
+ * Every chunk must have exactly the length its position implies (`partSize`,
+ * the last one the remainder) and, when the browser sent one, the same SHA-256.
+ * A chunk cut short on the way is refused with 422 so the browser re-sends it —
+ * it is never counted towards the file.
  *
  * Chunks land in the private staging area (`private/staging/<session>/…`) and are
  * deleted as they are concatenated during completion.
@@ -37,14 +42,17 @@ export async function POST(request: Request) {
     if (!body?.sessionId || !body.partNumber) return fail("invalid_payload");
     const session = await getOpenUploadSession(body.sessionId, auth.user.id);
     if (!session) return fail("session_not_found", 404);
-    if (body.partNumber > Math.ceil(session.sizeBytes / session.partSize)) return fail("part_out_of_range");
+    const partNumber = Number(body.partNumber);
+    if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > sessionPartCount(session)) return fail("part_out_of_range");
 
-    // Trust nothing: the chunk must actually exist in staging before we count it.
-    const staged = await objectExists(stagingPartKey(session.id, body.partNumber));
-    if (!staged) return fail("part_not_stored", 409);
+    // Trust nothing: the chunk must actually be in staging, whole, before we count it.
+    const stored = await objectSize(stagingPartKey(session.id, partNumber));
+    if (!stored) return fail("part_not_stored", 409);
+    const expected = expectedPartBytes(session, partNumber);
+    if (stored !== expected) return fail("part_size_mismatch", 422, { partNumber, expected, received: stored });
 
-    const updated = await recordUploadPart(session.id, body.partNumber, body.bytes ?? 0, body.etag ?? "");
-    return json({ ok: true, partNumber: body.partNumber, received: updated?.parts.length ?? 0 });
+    const updated = await recordUploadPart(session.id, partNumber, stored, body.etag ?? "");
+    return json({ ok: true, partNumber, bytes: stored, received: updated?.parts.length ?? 0 });
   }
 
   /* ---------- local chunk upload ---------- */
@@ -57,25 +65,29 @@ export async function POST(request: Request) {
 
   const sessionId = String(form.get("sessionId") ?? "");
   const partNumber = Number(form.get("partNumber") ?? 0);
+  const declaredHash = form.get("sha256");
   const file = form.get("file");
-  if (!sessionId || !partNumber || !(file instanceof File)) return fail("invalid_payload");
+  if (!sessionId || !Number.isInteger(partNumber) || !partNumber || !(file instanceof File)) return fail("invalid_payload");
+  if (declaredHash !== null && !isSha256Hex(declaredHash)) return fail("invalid_checksum", 400);
 
   const session = await getOpenUploadSession(sessionId, auth.user.id);
   if (!session) return fail("session_not_found", 404);
 
-  const totalParts = Math.ceil(session.sizeBytes / session.partSize);
-  if (partNumber < 1 || partNumber > Math.max(totalParts, 1)) return fail("part_out_of_range");
+  const totalParts = sessionPartCount(session);
+  if (partNumber < 1 || partNumber > totalParts) return fail("part_out_of_range");
   if (file.size > session.partSize + 1024 * 1024) {
     return fail("part_too_large", 413, { partSize: session.partSize });
   }
 
-  const received = session.parts.reduce((sum, part) => sum + part.bytes, 0);
-  const alreadyThisPart = session.parts.some((part) => part.partNumber === partNumber);
-  if (!alreadyThisPart && received + file.size > session.sizeBytes + 1024 * 1024) {
-    return fail("exceeds_declared_size", 413, { declared: session.sizeBytes, received });
-  }
-
   const buffer = Buffer.from(await file.arrayBuffer());
+  const expected = expectedPartBytes(session, partNumber);
+  if (buffer.byteLength !== expected) {
+    return fail("part_size_mismatch", 422, { partNumber, expected, received: buffer.byteLength });
+  }
+  const digest = crypto.createHash("sha256").update(buffer).digest("hex");
+  if (typeof declaredHash === "string" && declaredHash.toLowerCase() !== digest) {
+    return fail("part_corrupted", 422, { partNumber });
+  }
   const etag = crypto.createHash("md5").update(buffer).digest("hex");
 
   try {
@@ -85,11 +97,12 @@ export async function POST(request: Request) {
     return fail("storage_error", 502);
   }
 
-  const updated = await recordUploadPart(session.id, partNumber, buffer.byteLength, etag);
+  const updated = await recordUploadPart(session.id, partNumber, buffer.byteLength, etag, digest);
   return json({
     ok: true,
     partNumber,
     etag,
+    sha256: digest,
     bytes: buffer.byteLength,
     receivedParts: updated?.parts.length ?? 0,
     totalParts,

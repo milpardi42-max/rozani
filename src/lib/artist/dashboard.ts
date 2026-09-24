@@ -30,6 +30,8 @@ export interface DashboardWork {
   familyId: string | null;
   status: Asset["status"];
   visibility: Asset["visibility"];
+  /** `uploading` = the upload batch never completed (some files may be missing; stays private). */
+  uploadState: "uploading" | "complete";
   /** Watermarked preview for the work's first colourway, when one exists. */
   preview: string | null;
   colourways: { id: string; name: { fa: string; en: string }; hex: string; preview: string | null; files: number; bytes: number }[];
@@ -67,6 +69,8 @@ export interface ArtistDashboardData {
     works: number;
     live: number;
     inReview: number;
+    /** Works whose upload never completed — private until the artist sends the rest. */
+    incomplete: number;
     rejected: number;
     colourways: number;
     files: number;
@@ -130,6 +134,7 @@ export function toDashboardWork(asset: Asset): DashboardWork {
     familyId: asset.familyId ?? null,
     status: asset.status,
     visibility: asset.visibility,
+    uploadState: asset.uploadState ?? "complete",
     preview: asset.previewKey ?? colourways.find((colourway) => colourway.previewKey)?.previewKey ?? null,
     colourways: colourways.map((colourway) => {
       const own = files.filter((file) => file.colourwayId === colourway.id);
@@ -219,7 +224,12 @@ export async function getArtistDashboard(input: {
     totals: {
       works: works.length,
       live: works.filter((work) => work.status === "approved" && work.visibility === "public").length,
-      inReview: works.filter((work) => work.status === "pending_review" || work.status === "uploading" || work.status === "scanning").length,
+      inReview: works.filter(
+        (work) =>
+          work.uploadState !== "uploading" &&
+          (work.status === "pending_review" || work.status === "uploading" || work.status === "scanning"),
+      ).length,
+      incomplete: works.filter((work) => work.uploadState === "uploading").length,
       rejected: works.filter((work) => work.status === "rejected").length,
       colourways: works.reduce((sum, work) => sum + work.colourways.length, 0),
       files: works.reduce((sum, work) => sum + work.files, 0),

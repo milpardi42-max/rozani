@@ -29,6 +29,8 @@ bash scripts/marketplace-smoke/artist-dashboard-e2e.sh   # the two signup doors 
 bash scripts/marketplace-smoke/pages.sh           # every storefront/admin page renders
 bash scripts/marketplace-smoke/portfolio-e2e.sh   # the founder's introduction on /portfolio
 bash scripts/marketplace-smoke/shop-hero-e2e.sh    # the shop hero: panel · numbers · mosaic · family rail
+ADMIN_EMAIL=… ADMIN_PASSWORD=… \
+bash scripts/marketplace-smoke/upload-publish-e2e.sh   # verified upload → finalize → published in its shop family
 DATA=dist/.next/standalone/data \
 MARKETPLACE_MULTIPART_THRESHOLD_MB=5 \
 bash scripts/marketplace-smoke/multipart-e2e.sh   # 12 MB master uploaded in 8 MB chunks
@@ -72,9 +74,16 @@ Notes:
   It then checks that the two pages are one experience: the atelier's page links to `/{locale}/razieh`,
   the personal portfolio page links back and still carries its own six sections, and both are
   reachable from the footer and the sitemap.
+- `upload-publish-e2e.sh` signs up its own artist and proves the upload can no longer "look done"
+  without being done: damaged/short files and chunks are refused (422), a verified upload stays private
+  until `/upload/finalize` has checked the whole batch (409 `incomplete_upload` otherwise), then the work
+  is published and listed under its family in `/shop` — or, with the admin's review mode on, waits for
+  approval. It restores the admin setting and purges its works afterwards (`KEEP=1` keeps them). It
+  needs the admin credentials of the server (`ADMIN_EMAIL`/`ADMIN_PASSWORD`) and the local default
+  chunking (leave `MARKETPLACE_MULTIPART_THRESHOLD_MB` unset).
 - `shop-hero-e2e.sh` is the shop-hero rig: it reads the store the server is using (`DATA=…`) and
-  recomputes the four hero numbers from it, so the panel can never claim a catalogue size the shop
-  does not have. It also checks the mosaic's lead/second pieces (link, badge, SKU, family, price),
+  recomputes the four hero numbers from it (site products plus published artist works), so the panel
+  can never claim a catalogue size the shop does not have. It also checks the mosaic's lead/second pieces (link, badge, SKU, family, price),
   the colourways (names + real colour images), all eight `?family=` chips with their counts, the
   service banner — and that the catalogue below the hero (family sections, result counter, family
   isolation) is untouched.

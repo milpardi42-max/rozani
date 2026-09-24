@@ -114,9 +114,17 @@ public/
 
 ## Digital marketplace
 
-The digital licensing storefront (private master upload → admin review → payment → signed download →
-PDF certificate → royalties → subscriptions) is documented in **[`MARKETPLACE.md`](./MARKETPLACE.md)** —
-including the audit, every new route, the env flags and a step-by-step test recipe.
+The digital licensing storefront (verified private master upload → publish (or admin review) → payment →
+signed download → PDF certificate → royalties → subscriptions) is documented in
+**[`MARKETPLACE.md`](./MARKETPLACE.md)** — including the audit, every new route, the env flags and a
+step-by-step test recipe.
+
+Artist uploads are verified end to end: every file and chunk carries its SHA-256, the server refuses
+bytes that do not match the announced size/hash, and `POST /api/marketplace/upload/finalize` compares
+the whole batch with what was stored before anything is published. By default a verified work goes
+live at once — on its licence page and in `/shop` under the family the artist chose; admins can switch
+to review-first under **Admin → Marketplace → Settings** (or `MARKETPLACE_AUTO_PUBLISH=0`) and can
+hide or reject any work later. `scripts/marketplace-smoke/upload-publish-e2e.sh` covers it.
 Without `ZARINPAL_MERCHANT_ID` the built-in sandbox gateway takes over, so a full test purchase works
 end-to-end today.
 
@@ -129,7 +137,7 @@ sections, sidebar tree, filters, sorting) is `ShopFiltered`, unchanged:
 1. **the boutique panel** — a dark editorial card: the shop eyebrow, the collection's title and copy,
    and the two doors into the catalogue (`/shop?owner=site` · `/shop?owner=artist`);
 2. **live numbers** taken from the real catalogue, not typed by hand: products · families in use
-   (e.g. `4/8`) · colourways · contributing designers;
+   (e.g. `4/8`) · colourways · contributing designers — published artist works included;
 3. **the product mosaic** — the lead site-owned featured piece (family · maker · SKU · price), a
    second piece, and the lead's colourways with their swatch tiles, instead of a single flat image;
 4. **the family rail** — all eight families of `lib/data/families.ts` as `?family=<slug>` chips with
@@ -152,11 +160,16 @@ Products belong to one of eight families, defined once in `src/lib/data/families
 - **Shop** — `/{locale}/shop` renders one section per family in that order (plus «سایر محصولات /
   Other products» for products without a family) and `?family=<slug>` filters to a single family;
   `?family` composes with `?category`, `?artist`, sorting and search. Style categories are unchanged.
+  Published artist works (digital licences) are listed in the section of their family next to the
+  products (`WorkCard`, linking to `/marketplace/<slug>`), counted in the family chips and the
+  owner filter; a physical `?category=` shows products only.
 - **Sidebar** — the families appear as nested sub-categories under «الگو / Pattern», above the style
   categories, with live counts.
 - **Artist upload** — the uploader in the artist profile requires a family; the session API answers
-  `invalid_family` otherwise. After a successful upload the artist is redirected to that family in the
-  shop (`/{locale}/shop?family=<slug>`), and `/artist` shows the family next to each asset.
+  `invalid_family` otherwise. Once the upload is verified and the work is published, the artist is
+  offered the work page and is redirected to that family in the shop
+  (`/{locale}/shop?family=<slug>`), where the work now appears; `/artist` shows the family next to
+  each asset.
 - **Admin** — `ProductsManager` gives every product a «دسته محصول» selector (including «بدون دسته»).
 
 ## Artists: registration & dashboard

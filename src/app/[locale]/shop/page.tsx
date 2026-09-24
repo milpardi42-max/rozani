@@ -4,6 +4,7 @@ import { ShopHero } from "@/components/shop/ShopHero";
 import { Breadcrumb } from "@/components/ui/Breadcrumb";
 import { FAMILY_PARENT, PRODUCT_FAMILIES } from "@/lib/data/families";
 import { enrichProduct, getSite } from "@/lib/data/queries";
+import { listShopWorks } from "@/lib/marketplace/shop-works-server";
 import { dictionaries } from "@/lib/i18n/dictionary";
 import type { Locale } from "@/lib/i18n/types";
 import { href, t } from "@/lib/utils";
@@ -24,12 +25,15 @@ export default async function ShopPage({ params }: { params: Promise<{ locale: L
   const exclusive = site.collections.find((c) => c.slug === "atelier-exclusive");
   const banner = site.banners.find((b) => b.enabled && b.placement === "shop");
   const usedCats = site.categories.filter((c) => site.products.some((p) => p.categoryId === c.id));
+  /* Published artist works (digital licences), filed under the family chosen on upload. */
+  const works = await listShopWorks(site);
 
   /* The eight product families every pattern is made for — the «الگو» tree in the sidebar.
      All of them stay listed (even before the first product lands in one) so an artist's
-     upload always has a real category to point at. */
+     upload always has a real category to point at. Counts include the artists' works. */
   const families: FamilyOption[] = PRODUCT_FAMILIES.map((family) => {
-    const count = site.products.filter((p) => p.familyId === family.id).length;
+    const count =
+      site.products.filter((p) => p.familyId === family.id).length + works.filter((work) => work.familyId === family.id).length;
     return { id: family.slug, label: family.name[locale] ?? family.name.fa, count: count || undefined };
   });
 
@@ -52,6 +56,7 @@ export default async function ShopPage({ params }: { params: Promise<{ locale: L
           title={exclusive ? t(exclusive.title, locale) : d.nav.products}
           description={exclusive ? t(exclusive.description, locale) : d.home.exclusiveDesc}
           products={products}
+          works={works}
           families={families}
           brand={d.brand}
           labels={{
@@ -77,6 +82,7 @@ export default async function ShopPage({ params }: { params: Promise<{ locale: L
           title={locale === "fa" ? "فروشگاه سطح و دکور" : "Surface & décor shop"}
           families={families}
           familyParent={FAMILY_PARENT[locale]}
+          works={works}
           categories={usedCats
             .slice()
             .sort((a, b) => a.order - b.order)
@@ -96,8 +102,16 @@ export default async function ShopPage({ params }: { params: Promise<{ locale: L
               key: "owner",
               label: d.common.creator,
               options: [
-                { id: "site", label: d.brand, count: site.products.filter((p) => !p.artistId).length },
-                { id: "artist", label: d.nav.artists, count: site.products.filter((p) => !!p.artistId).length },
+                {
+                  id: "site",
+                  label: d.brand,
+                  count: site.products.filter((p) => !p.artistId).length + works.filter((work) => !work.artistId).length,
+                },
+                {
+                  id: "artist",
+                  label: d.nav.artists,
+                  count: site.products.filter((p) => !!p.artistId).length + works.filter((work) => !!work.artistId).length,
+                },
               ],
             },
           ]}
