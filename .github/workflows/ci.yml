@@ -1,0 +1,23 @@
+name: CI
+on:
+  push:
+    branches: [main, "arena/**"]
+  pull_request:
+    branches: [main]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+        env:
+          ADMIN_EMAIL: ci@example.com
+          ADMIN_PASSWORD: ci-password-long
+          AUTH_SECRET: ci-secret-long-random-string
+          NEXT_PUBLIC_SITE_URL: https://example.com

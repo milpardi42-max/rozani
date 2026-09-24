@@ -1,0 +1,1295 @@
+@import "tailwindcss";
+
+/* =============================================================================
+   ROSIE ATELIER — GLOBAL DESIGN SYSTEM
+   Single source of truth for tokens, typography, motion and primitives.
+   ============================================================================= */
+
+/* ---------- Fonts (local-first) ------------------------------------------- */
+@font-face {
+  font-family: "iransanse-web";
+  src: url("/fonts/iransanse-web/IRANSansWeb.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "iransanse-web";
+  src: url("/fonts/iransanse-web/IRANSansWeb_Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: "iransanse-web";
+  src: url("/fonts/iransanse-web/IRANSansWeb_SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "iransanse-web";
+  src: url("/fonts/iransanse-web/IRANSansWeb_Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/inter/inter-latin-wght-normal.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Instrument Serif";
+  src: url("/fonts/instrument-serif/instrument-serif-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Instrument Serif";
+  src: url("/fonts/instrument-serif/instrument-serif-latin-400-italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Lalezar";
+  src: url("/fonts/lalezar/Lalezar-arabic.woff2") format("woff2");
+  unicode-range: U+0600-06FF, U+FB50-FDFF, U+FE70-FEFF;
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Lalezar";
+  src: url("/fonts/lalezar/Lalezar-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  font-weight: 400;
+  font-display: swap;
+}
+
+/* ---------- Semantic tokens: LIGHT (default, white foundation) ------------ */
+:root {
+  color-scheme: light;
+
+  --background: #ffffff;
+  --background-secondary: #f6f7f9;
+  --surface: #ffffff;
+  --surface-elevated: #ffffff;
+  --surface-glass: rgba(255, 255, 255, 0.72);
+  --foreground: #0f172a;
+  --foreground-secondary: #475569;
+  --muted: #94a3b8;
+  --border: #e6e9ef;
+  --border-strong: #cfd5df;
+
+  --primary: #1b2e4b;
+  --primary-hover: #12213a;
+  --primary-foreground: #ffffff;
+  --accent: #b5713a;
+  --accent-hover: #9c5f2d;
+  --accent-soft: #f6ede4;
+  --accent-foreground: #ffffff;
+  --blue: #3b5b8c;
+  --blue-soft: #e9eef7;
+
+  --success: #167a55;
+  --warning: #b7791f;
+  --error: #b42318;
+
+  --shadow-soft: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 12px rgba(15, 23, 42, 0.04);
+  --shadow-medium: 0 2px 6px rgba(15, 23, 42, 0.05), 0 12px 32px rgba(15, 23, 42, 0.08);
+  --shadow-elevated: 0 8px 20px rgba(15, 23, 42, 0.08), 0 32px 64px rgba(15, 23, 42, 0.12);
+  --shadow-glow: 0 0 0 1px rgba(181, 113, 58, 0.25), 0 12px 40px rgba(181, 113, 58, 0.18);
+
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 28px;
+
+  --blur-glass: 14px;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 160ms;
+  --dur-base: 260ms;
+  --dur-slow: 520ms;
+
+  --container: 1360px;
+  --header-h: 76px;
+  --header-h-compact: 60px;
+}
+
+/* ---------- Semantic tokens: DARK (cinematic, deep) ----------------------- */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --background: #0a0d13;
+  --background-secondary: #0f131b;
+  --surface: #121722;
+  --surface-elevated: #18202d;
+  --surface-glass: rgba(14, 18, 26, 0.7);
+  --foreground: #f1f4f8;
+  --foreground-secondary: #aab4c3;
+  --muted: #6b7788;
+  --border: #1f2937;
+  --border-strong: #2f3b4c;
+
+  --primary: #dfe7f3;
+  --primary-hover: #ffffff;
+  --primary-foreground: #0a0d13;
+  --accent: #d38f55;
+  --accent-hover: #e2a370;
+  --accent-soft: #2a1d13;
+  --accent-foreground: #0a0d13;
+  --blue: #8fb0e3;
+  --blue-soft: #16213a;
+
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-medium: 0 2px 6px rgba(0, 0, 0, 0.35), 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-elevated: 0 8px 20px rgba(0, 0, 0, 0.45), 0 32px 64px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 0 1px rgba(211, 143, 85, 0.3), 0 12px 40px rgba(211, 143, 85, 0.2);
+}
+
+/* ---------- Tailwind theme bridge ----------------------------------------- */
+@theme inline {
+  --color-background: var(--background);
+  --color-background-secondary: var(--background-secondary);
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-foreground: var(--foreground);
+  --color-foreground-secondary: var(--foreground-secondary);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-blue: var(--blue);
+  --color-blue-soft: var(--blue-soft);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+
+  --font-sans: "Inter", "iransanse-web", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Instrument Serif", "iransanse-web", Georgia, serif;
+  --font-fa: "Lalezar", "iransanse-web", "Inter", system-ui, sans-serif;
+  --font-fa-display: "Lalezar", "iransanse-web", system-ui, sans-serif;
+
+  --radius-xs: var(--radius-xs);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+
+  --shadow-soft: var(--shadow-soft);
+  --shadow-medium: var(--shadow-medium);
+  --shadow-elevated: var(--shadow-elevated);
+  --shadow-glow: var(--shadow-glow);
+
+  --breakpoint-xs: 30rem;
+  --breakpoint-2xl: 96rem;
+
+  --ease-out: var(--ease-out);
+  --ease-in-out: var(--ease-in-out);
+}
+
+/* ---------- Base ---------------------------------------------------------- */
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html {
+    font-size: 15px;
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv11", "liga";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow-x: clip;
+  }
+  /* All Persian text → Lalezar */
+  :lang(fa),
+  html[lang="fa"] body,
+  html[lang="fa"] input,
+  html[lang="fa"] button,
+  html[lang="fa"] textarea,
+  html[lang="fa"] select,
+  html[lang="fa"] .font-serif {
+    font-family: var(--font-fa) !important;
+    letter-spacing: 0 !important;
+  }
+  html[lang="fa"] body {
+    line-height: 1.9;
+  }
+  html[lang="fa"] .font-display,
+  html[lang="fa"] .font-serif {
+    font-family: var(--font-fa-display) !important;
+    font-weight: 400;
+    line-height: 1.2 !important;
+    letter-spacing: 0 !important;
+  }
+  ::selection {
+    background: var(--accent-soft);
+    color: var(--foreground);
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: var(--radius-xs);
+  }
+  img {
+    color: transparent;
+  }
+  button {
+    cursor: pointer;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* ---------- Typography scale ---------------------------------------------- */
+@utility font-display {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  letter-spacing: -0.015em;
+  line-height: 1.02;
+}
+@utility text-display {
+  font-size: clamp(3rem, 7vw, 6.5rem);
+  line-height: 0.96;
+}
+@utility text-h1 {
+  font-size: clamp(2.5rem, 5vw, 4.5rem);
+  line-height: 1.03;
+}
+@utility text-h2 {
+  font-size: clamp(2rem, 3.5vw, 3.25rem);
+  line-height: 1.08;
+}
+@utility text-h3 {
+  font-size: clamp(1.375rem, 2vw, 1.875rem);
+  line-height: 1.2;
+}
+
+/* FA overrides: tighter sizes for Lalezar display headings */
+html[lang="fa"] .text-display {
+  font-size: clamp(1.9rem, 4.2vw, 3.75rem);
+  line-height: 1.18;
+}
+html[lang="fa"] .text-h1 {
+  font-size: clamp(2rem, 4vw, 3.75rem);
+  line-height: 1.2;
+}
+html[lang="fa"] .text-h2 {
+  font-size: clamp(1.625rem, 3vw, 2.75rem);
+  line-height: 1.25;
+}
+html[lang="fa"] .text-h3 {
+  font-size: clamp(1.25rem, 1.8vw, 1.625rem);
+  line-height: 1.3;
+}
+@utility text-h4 {
+  font-size: 1.125rem;
+  line-height: 1.35;
+}
+@utility text-body-lg {
+  font-size: 1.125rem;
+  line-height: 1.7;
+}
+@utility text-body {
+  font-size: 1rem;
+  line-height: 1.7;
+}
+@utility text-body-sm {
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+@utility text-caption {
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+@utility text-label {
+  font-size: 0.6875rem;
+  line-height: 1;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+html[lang="fa"] .text-label {
+  letter-spacing: 0 !important;
+  font-size: 0.75rem;
+}
+
+/* ---------- Layout primitives --------------------------------------------- */
+@utility container-x {
+  width: 100%;
+  max-width: var(--container);
+  margin-inline: auto;
+  padding-inline: clamp(1rem, 4vw, 2.5rem);
+}
+@utility section-y {
+  padding-block: clamp(3.5rem, 8vw, 7rem);
+}
+@utility hairline {
+  border-top: 1px solid var(--border);
+}
+
+/* ---------- Surfaces ------------------------------------------------------ */
+@utility glass {
+  background: var(--surface-glass);
+  backdrop-filter: blur(var(--blur-glass)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(1.4);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+@utility surface-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+@utility vignette {
+  background: linear-gradient(
+    to top,
+    rgba(8, 10, 16, 0.78) 0%,
+    rgba(8, 10, 16, 0.32) 45%,
+    rgba(8, 10, 16, 0.05) 100%
+  );
+}
+@utility gradient-strip {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--accent) 30%,
+    var(--blue) 70%,
+    transparent 100%
+  );
+  opacity: 0.55;
+  height: 1px;
+}
+
+/* ---------- Motion system ------------------------------------------------- */
+@keyframes ra-blur-in {
+  from {
+    opacity: 0;
+    filter: blur(10px);
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0);
+  }
+}
+@keyframes ra-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes ra-scale-fade {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes ra-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes ra-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+@keyframes ra-progress {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+@keyframes ra-page-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Cinematic hover-card animations ── */
+@keyframes ra-hc-backdrop {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes ra-hc-panel {
+  from {
+    opacity: 0;
+    transform: perspective(900px) scale(0.88) translateY(20px) rotateX(6deg);
+    filter: blur(6px);
+  }
+  60% {
+    filter: blur(0);
+  }
+  to {
+    opacity: 1;
+    transform: perspective(900px) scale(1) translateY(0) rotateX(0deg);
+    filter: blur(0);
+  }
+}
+@keyframes ra-hc-image {
+  from {
+    opacity: 0;
+    transform: scale(1.12);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes ra-hc-stagger {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── Lightbox 3D entrance ── */
+@keyframes lb-backdrop {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes lb-panel {
+  from {
+    opacity: 0;
+    transform: perspective(1200px) scale(0.82) translateY(32px) rotateX(14deg);
+    filter: blur(8px);
+  }
+  55% {
+    filter: blur(0);
+  }
+  to {
+    opacity: 1;
+    transform: perspective(1200px) scale(1) translateY(0) rotateX(0deg);
+    filter: blur(0);
+  }
+}
+
+/* ── Page Hero ken-burns zoom ── */
+@keyframes ra-hero-zoom-in {
+  from { transform: scale(1); }
+  to   { transform: scale(1.08); }
+}
+@keyframes ra-hero-zoom-out {
+  from { transform: scale(1.08); }
+  to   { transform: scale(1); }
+}
+@utility hero-zoom-in {
+  animation: ra-hero-zoom-in 8s var(--ease-out) both;
+  will-change: transform;
+}
+@utility hero-zoom-out {
+  animation: ra-hero-zoom-out 8s var(--ease-out) both;
+  will-change: transform;
+}
+
+@utility anim-blur-in {
+  animation: ra-blur-in var(--dur-slow) var(--ease-out) both;
+}
+@utility anim-fade-up {
+  animation: ra-fade-up var(--dur-slow) var(--ease-out) both;
+}
+@utility anim-scale-fade {
+  animation: ra-scale-fade var(--dur-base) var(--ease-out) both;
+}
+@utility anim-page {
+  animation: ra-page-in 420ms var(--ease-out) both;
+}
+
+/* ── Announcement bar entrance animations ── */
+@keyframes ab-slide-down {
+  from {
+    opacity: 0;
+    transform: translateY(-100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes ab-slide-in-rtl {
+  from {
+    opacity: 0;
+    transform: translate3d(var(--ab-distance), -0.35rem, 0) scale(0.985);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0);
+  }
+}
+@keyframes ab-slide-in-ltr {
+  from {
+    opacity: 0;
+    transform: translate3d(calc(var(--ab-distance) * -1), -0.35rem, 0) scale(0.985);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0);
+  }
+}
+@keyframes ab-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes ab-blur-in {
+  from {
+    opacity: 0;
+    filter: blur(8px);
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0);
+  }
+}
+@keyframes ab-bounce {
+  0%   { opacity: 0; transform: translateY(-110%); }
+  60%  { opacity: 1; transform: translateY(6px); }
+  80%  { transform: translateY(-3px); }
+  100% { transform: translateY(0); }
+}
+@keyframes ab-marquee-rtl {
+  from { transform: translateX(100%); }
+  to { transform: translateX(-100%); }
+}
+@keyframes ab-marquee-ltr {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
+.ab-transition-slide-down { animation: ab-slide-down 380ms var(--ease-out) both; }
+.ab-transition-slide-down.ab-direction-rtl { animation-name: ab-slide-in-rtl; }
+.ab-transition-slide-down.ab-direction-ltr { animation-name: ab-slide-in-ltr; }
+.ab-transition-fade       { animation: ab-fade 400ms var(--ease-out) both; }
+.ab-transition-blur-in    { animation: ab-blur-in 450ms var(--ease-out) both; }
+.ab-transition-bounce     { animation: ab-bounce 500ms var(--ease-out) both; }
+.ab-motion-animated { --ab-distance: 4rem; }
+.ab-motion-soft {
+  --ab-distance: 1.75rem;
+  animation-duration: 280ms;
+}
+.ab-motion-static { animation: none !important; }
+.ab-marquee-track {
+  display: inline-block;
+  min-width: max-content;
+  white-space: nowrap;
+  animation: ab-marquee-rtl 12s linear infinite;
+  will-change: transform;
+}
+.ab-marquee-track.ab-marquee-ltr { animation-name: ab-marquee-ltr; }
+.ab-marquee-track.ab-marquee-soft { animation-duration: 20s; }
+
+/* Scroll reveal (driven by <Reveal/>) */
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(20px);
+  transition:
+    opacity 700ms var(--ease-out),
+    transform 700ms var(--ease-out),
+    filter 700ms var(--ease-out);
+  transition-delay: var(--reveal-delay, 0ms);
+}
+[data-reveal="blur"] {
+  filter: blur(8px);
+}
+[data-reveal].is-visible {
+  opacity: 1;
+  transform: none;
+  filter: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ab-transition-slide-down,
+  .ab-transition-fade,
+  .ab-transition-blur-in,
+  .ab-transition-bounce {
+    animation: none;
+  }
+  .ab-marquee-track {
+    animation: none;
+    transform: none;
+    white-space: normal;
+  }
+  [data-reveal] {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+/* ---------- Interaction primitives --------------------------------------- */
+@utility img-zoom {
+  transition: transform 900ms var(--ease-out);
+  will-change: transform;
+}
+.group:hover .img-zoom {
+  transform: scale(1.045);
+}
+@utility arrow-shift {
+  transition: transform var(--dur-base) var(--ease-out);
+}
+.group:hover .arrow-shift {
+  transform: translateX(var(--dir-x, 4px));
+}
+html[dir="rtl"] {
+  --dir-x: -4px;
+}
+html[dir="ltr"] {
+  --dir-x: 4px;
+}
+@utility rtl-flip {
+  transform: scaleX(var(--flip, 1));
+}
+html[dir="rtl"] {
+  --flip: -1;
+}
+
+/* Spotlight (cursor-follow, disabled on touch) */
+.spotlight {
+  position: relative;
+}
+.spotlight::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-base) var(--ease-out);
+  background: radial-gradient(
+    420px circle at var(--sx, 50%) var(--sy, 50%),
+    color-mix(in srgb, var(--accent) 14%, transparent),
+    transparent 60%
+  );
+  z-index: 1;
+}
+@media (hover: hover) and (pointer: fine) {
+  .spotlight:hover::before {
+    opacity: 1;
+  }
+}
+
+/* Skeleton */
+@utility skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--background-secondary) 25%,
+    color-mix(in srgb, var(--background-secondary) 60%, var(--surface)) 50%,
+    var(--background-secondary) 75%
+  );
+  background-size: 200% 100%;
+  animation: ra-shimmer 1.6s linear infinite;
+  border-radius: var(--radius-sm);
+}
+
+/* Scrollbars & misc */
+@utility no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+@utility scroll-snap-x {
+  scroll-snap-type: x mandatory;
+}
+@utility snap-item {
+  scroll-snap-align: start;
+}
+
+/* Editorial prose */
+.prose-ra {
+  max-width: 68ch;
+  font-size: 1.0625rem;
+  line-height: 1.85;
+  color: var(--foreground-secondary);
+}
+.prose-ra p + p {
+  margin-top: 1.25em;
+}
+.prose-ra strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+.prose-ra h3 {
+  color: var(--foreground);
+  font-weight: 600;
+  font-size: 1.25rem;
+  margin-top: 2em;
+  margin-bottom: 0.6em;
+}
+
+/* Numbers: keep tabular in both scripts */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* =============================================================================
+   RAZIEH KHEIRIPOUR PORTFOLIO — Design tokens, animations, utilities
+   ============================================================================= */
+
+/* ---------- Portfolio colour palette (appended to :root) ------------------- */
+:root {
+  --pf-cream:      hsl(40 30% 95%);
+  --pf-terracotta: hsl(12 38% 30%);
+  --pf-ochre:      hsl(28 48% 52%);
+  --pf-gold:       hsl(38 34% 58%);
+  --pf-charcoal:   hsl(30 10% 18%);
+  --pf-ink:        hsl(30 12% 12%);
+  --pf-stone:      hsl(30 8% 72%);
+  --pf-card:       hsl(0 0% 100%);
+}
+
+/* Tailwind utility classes for portfolio palette */
+@theme inline {
+  --color-pf-cream:      var(--pf-cream);
+  --color-pf-terracotta: var(--pf-terracotta);
+  --color-pf-ochre:      var(--pf-ochre);
+  --color-pf-gold:       var(--pf-gold);
+  --color-pf-charcoal:   var(--pf-charcoal);
+  --color-pf-ink:        var(--pf-ink);
+  --color-pf-stone:      var(--pf-stone);
+  --color-pf-card:       var(--pf-card);
+}
+
+/* ---------- Portfolio animations ------------------------------------------ */
+@keyframes pf-fade-up {
+  from { opacity: 0; transform: translateY(30px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pf-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes pf-scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes pf-slow-zoom {
+  from { transform: scale(1); }
+  to   { transform: scale(1.1); }
+}
+@keyframes pf-draw-line {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
+/* Utilities */
+.animate-pf-fade-up {
+  animation: pf-fade-up 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.animate-pf-fade-in {
+  animation: pf-fade-in 1.2s ease both;
+}
+.animate-pf-scale-in {
+  animation: pf-scale-in 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.animate-pf-slow-zoom {
+  animation: pf-slow-zoom 20s ease-in-out infinite alternate;
+  will-change: transform;
+}
+.animate-pf-draw-line {
+  animation: pf-draw-line 1.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: left;
+}
+[dir="rtl"] .animate-pf-draw-line {
+  transform-origin: right;
+}
+
+/* ---------- Portfolio scroll reveal ---------------------------------------- */
+.reveal {
+  opacity: 0;
+  transform: translateY(40px);
+  transition:
+    opacity 1s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 1s cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: var(--reveal-delay, 0ms);
+}
+.reveal.in-view {
+  opacity: 1;
+  transform: translateY(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+/* ---------- Portfolio noise background ------------------------------------- */
+.pf-bg-noise {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23noise)' opacity='0.4'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+}
+
+/* ---------- RTL sizing adjustments for Lalezar in portfolio ---------------- */
+[dir="rtl"] .pf-name .font-display,
+[dir="rtl"] .pf-name {
+  font-family: var(--font-fa-display) !important;
+}
+
+
+/* ============================================================
+   Auth Shell — Login4 + Signup1 inspired animated cards
+   ============================================================ */
+
+/* Page wrapper — fills the <main> flex child, not the full viewport */
+.auth-shell-page {
+  flex: 1;
+  min-height: calc(100dvh - var(--header-h));
+  display: grid;
+  place-items: center;
+  background: var(--background-secondary);
+  padding: 1.5rem 1rem;
+}
+
+/* Card base */
+.auth-card {
+  --card-w: 700px;
+  --card-h: 460px;
+  position: relative;
+  width: min(var(--card-w), 100%);
+  height: var(--card-h);
+  border-radius: var(--radius-xl);
+  background: var(--background);
+  box-shadow: var(--shadow-elevated);
+  overflow: hidden;
+  border: 6px solid var(--background);
+}
+
+.auth-card--signup {
+  opacity: 0;
+  transform: translateY(12px) scale(0.985);
+  transition: opacity 0.45s var(--ease-out), transform 0.45s var(--ease-out);
+}
+
+.auth-card--signup.auth-card--entered {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+@media (max-width: 640px) {
+  .auth-card {
+    --card-h: auto;
+    height: auto;
+    min-height: 560px;
+    border-radius: var(--radius-lg);
+  }
+}
+
+/* ──────────────────────────────────────────────────────────
+   Background image panel
+   ────────────────────────────────────────────────────────── */
+.auth-card__bg {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  border-radius: calc(var(--radius-xl) - 4px);
+  overflow: hidden;
+  transition: translate 0.65s var(--ease-in-out);
+}
+
+/* Login: image LEFT side */
+.auth-card__bg--login {
+  left: 0;
+  right: auto;
+}
+.auth-card--to-signup .auth-card__bg--login {
+  translate: -100% 0;
+}
+
+/* Signup: image RIGHT side, diagonal left edge */
+.auth-card__bg--signup {
+  right: 0;
+  left: auto;
+  clip-path: polygon(10% 0%, 100% 0%, 100% 100%, 0% 100%);
+  border-radius: 0 calc(var(--radius-xl) - 4px) calc(var(--radius-xl) - 4px) 0;
+  transition: clip-path 0.65s var(--ease-in-out), translate 0.65s var(--ease-in-out);
+}
+.auth-card--to-login .auth-card__bg--signup {
+  translate: 100% 0;
+}
+
+/* Secondary accent shape (bottom-left triangle) */
+.auth-card__bg--signup-2 {
+  left: 0;
+  right: auto;
+  width: 100%;
+  background: var(--accent);
+  opacity: 0.06;
+  clip-path: polygon(0 70%, 38% 100%, 0 100%);
+  border-radius: 0;
+  pointer-events: none;
+  z-index: 1;
+  transition: none;
+}
+
+.auth-card__bg-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    160deg,
+    rgba(15, 23, 42, 0.5) 0%,
+    rgba(15, 23, 42, 0.15) 100%
+  );
+}
+
+/* ──────────────────────────────────────────────────────────
+   Hero / image overlay panels
+   ────────────────────────────────────────────────────────── */
+.auth-card__hero {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 0 28px;
+  color: #fff;
+  text-align: center;
+  transition: opacity 0.4s var(--ease-out), translate 0.65s var(--ease-in-out);
+}
+
+.auth-card__hero h2 {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.auth-card__hero p {
+  margin: 0;
+  font-size: 0.85rem;
+  opacity: 0.85;
+  line-height: 1.55;
+  max-width: 220px;
+}
+
+.auth-card__hero-logo {
+  width: 32px;
+  height: 32px;
+  color: rgba(255, 255, 255, 0.9);
+  margin-bottom: 4px;
+}
+
+/* Login → hero sits on the LEFT image */
+.auth-card__hero--login {
+  left: 0;
+  right: auto;
+}
+.auth-card--to-signup .auth-card__hero--login {
+  opacity: 0;
+  translate: -40px 0;
+}
+
+/* Signup → hero sits on the RIGHT image */
+.auth-card__hero--signup {
+  right: 0;
+  left: auto;
+}
+.auth-card--to-login .auth-card__hero--signup {
+  opacity: 0;
+  translate: 40px 0;
+}
+
+.auth-card__hero-btn {
+  margin-top: 4px;
+  padding: 10px 36px;
+  border-radius: 32px;
+  border: 1.5px solid rgba(255, 255, 255, 0.75);
+  background: transparent;
+  color: #fff;
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  cursor: pointer;
+  transition: background 0.25s, color 0.25s;
+}
+.auth-card__hero-btn:hover {
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--foreground);
+}
+
+/* ──────────────────────────────────────────────────────────
+   Form panels
+   ────────────────────────────────────────────────────────── */
+.auth-card__form {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 28px 32px;
+  background: var(--background);
+  transition: translate 0.65s var(--ease-in-out), opacity 0.4s var(--ease-out);
+  overflow-y: auto;
+}
+
+/* Login form: RIGHT side (image is on the left) */
+.auth-card__form--login {
+  right: 0;
+  left: auto;
+}
+.auth-card--to-signup .auth-card__form--login {
+  translate: 100% 0;
+  opacity: 0;
+}
+
+/* Signup form: LEFT side (image is on the right) */
+.auth-card__form--signup {
+  left: 0;
+  right: auto;
+}
+.auth-card--to-login .auth-card__form--signup {
+  translate: -100% 0;
+  opacity: 0;
+}
+
+.auth-card__form-logo {
+  width: 28px;
+  height: 28px;
+  color: var(--foreground);
+  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+
+.auth-card__form-title {
+  margin: 0 0 20px;
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+/* Compact the AuthForm's spacing inside the card */
+.auth-card__form .space-y-4 > * + * {
+  margin-top: 12px !important;
+}
+
+.auth-card__form input {
+  height: 42px !important;
+}
+
+.auth-card__form button[type="submit"],
+.auth-card__form .h-13 {
+  height: 42px !important;
+  font-size: 0.85rem !important;
+}
+
+.auth-card__admin-link {
+  margin-top: 12px;
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--foreground-secondary);
+}
+
+.auth-card__admin-link a {
+  color: inherit;
+  text-decoration: none;
+  opacity: 0.6;
+}
+
+.auth-card__admin-link a:hover {
+  opacity: 1;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Responsive: stack on mobile */
+@media (max-width: 640px) {
+  .auth-card__bg,
+  .auth-card__hero {
+    display: none;
+  }
+  .auth-card__form--login,
+  .auth-card__form--signup {
+    position: relative;
+    left: 0;
+    right: 0;
+    width: 100%;
+    padding: 32px 24px;
+    min-height: 560px;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────
+   Auto-login cinematic state (signup → login transition)
+   ────────────────────────────────────────────────────────── */
+
+/* When auto-login is active, dim the image panel slightly */
+.auth-card--auto-login .auth-card__bg--login {
+  filter: brightness(0.75);
+  transition: filter 0.6s var(--ease-in-out), translate 0.65s var(--ease-in-out);
+}
+
+/* Auto-login panel: full-height centred overlay inside the form area */
+.auth-card__auto-login {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  height: 100%;
+  animation: auth-auto-fade-in 0.45s var(--ease-out) both;
+}
+
+@keyframes auth-auto-fade-in {
+  from { opacity: 0; translate: 0 16px; }
+  to   { opacity: 1; translate: 0 0; }
+}
+
+/* Spinning ring */
+.auth-card__auto-ring {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 2.5px solid var(--border-strong);
+  border-top-color: var(--primary);
+  animation: auth-spin 0.9s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes auth-spin {
+  to { rotate: 360deg; }
+}
+
+/* Logo inside auto panel */
+.auth-card__auto-logo {
+  width: 26px;
+  height: 26px;
+  color: var(--foreground);
+  position: absolute;
+  /* visually centred inside the ring */
+  animation: auth-auto-fade-in 0.6s 0.15s var(--ease-out) both;
+}
+
+/* Wrap ring + logo together */
+.auth-card__auto-login::before {
+  content: none;
+}
+
+.auth-card__auto-ring-wrap {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.auth-card__auto-label {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--foreground);
+  text-align: center;
+  animation: auth-auto-fade-in 0.5s 0.2s var(--ease-out) both;
+}
+
+.auth-card__auto-email {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-align: center;
+  direction: ltr;
+  animation: auth-auto-fade-in 0.5s 0.35s var(--ease-out) both;
+}
+
+/* Cinematic overlay (above the card) shown on signup page */
+.auth-transition-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: rgba(var(--background), 0.0);
+  pointer-events: none;
+  animation: auth-overlay-in 0.4s var(--ease-out) both;
+}
+
+@keyframes auth-overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.auth-transition-ring {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  border: 3px solid rgba(255,255,255,0.25);
+  border-top-color: var(--primary);
+  animation: auth-spin 0.85s linear infinite;
+}
+
+.auth-transition-label {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--foreground);
+  animation: auth-auto-fade-in 0.4s 0.1s var(--ease-out) both;
+}
