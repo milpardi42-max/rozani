@@ -22,7 +22,7 @@ import { useLocale } from "@/components/providers/AppProviders";
 import { Badge } from "@/components/ui/Badge";
 import { formatPrice, href } from "@/lib/utils";
 import { SESSION_FETCH } from "@/lib/http";
-import { familyName } from "@/lib/data/families";
+import { familyById, familyName } from "@/lib/data/families";
 import { formatLabel } from "@/lib/marketplace/formats";
 import type { PricePair } from "@/lib/marketplace/types";
 import type { Localized } from "@/lib/i18n/types";
@@ -45,6 +45,8 @@ interface StudioAsset {
   familyId?: string | null;
   status: string;
   visibility: string;
+  /** `uploading` = the batch never reached `/upload/finalize` (some files may be missing). */
+  uploadState?: string;
   createdAt: string;
   rejectionNote?: string;
   review?: { reviewedBy?: string; reviewedAt?: string; note?: string };
@@ -141,6 +143,8 @@ export function ArtistStudio({ locale }: { locale: "fa" | "en" }) {
     return isStudioTab(requested) ? requested : "assets";
   });
   const [assets, setAssets] = useState<StudioAsset[]>([]);
+  /* Publishing policy set by the admin — null until the first load. */
+  const [autoPublish, setAutoPublish] = useState<boolean | null>(null);
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [wallet, setWallet] = useState<WalletData | null>(null);
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
@@ -164,12 +168,19 @@ export function ArtistStudio({ locale }: { locale: "fa" | "en" }) {
         fetch(`/api/marketplace/artist/affiliate?locale=${locale}`, SESSION_FETCH),
       ]);
 
-      const assetsData = (await assetsRes.json()) as { ok?: boolean; assets?: StudioAsset[]; uploads?: Upload[]; error?: string };
+      const assetsData = (await assetsRes.json()) as {
+        ok?: boolean;
+        assets?: StudioAsset[];
+        uploads?: Upload[];
+        policy?: { autoPublish?: boolean };
+        error?: string;
+      };
       if (!assetsData.ok) {
         setError(assetsData.error === "forbidden" ? (fa ? "این بخش مخصوص هنرمندان است." : "This area is for artists.") : assetsData.error ?? "failed");
         return;
       }
       setAssets(assetsData.assets ?? []);
+      if (typeof assetsData.policy?.autoPublish === "boolean") setAutoPublish(assetsData.policy.autoPublish);
       setUploads(assetsData.uploads ?? []);
 
       const walletData = (await walletRes.json()) as { ok?: boolean; wallet?: WalletData };
@@ -344,8 +355,12 @@ export function ArtistStudio({ locale }: { locale: "fa" | "en" }) {
               <p className="mt-3 font-medium">{fa ? "هنوز اثری ارسال نکرده‌اید" : "You have not submitted a work yet"}</p>
               <p className="mt-1 text-caption text-foreground-secondary">
                 {fa
-                  ? "فایل مادر را در تب «ارسال فایل مادر» بارگذاری کنید؛ پس از بازبینی مدیر منتشر می‌شود."
-                  : "Upload a master in the “Submit master” tab — it goes live after admin review."}
+                  ? autoPublish === false
+                    ? "فایل مادر را در تب «ارسال فایل مادر» بارگذاری کنید؛ پس از بازبینی مدیر منتشر می‌شود."
+                    : "فایل مادر را در تب «ارسال فایل مادر» بارگذاری کنید؛ پس از رسیدن کامل همه‌ی فایل‌ها در فروشگاه منتشر می‌شود."
+                  : autoPublish === false
+                    ? "Upload a master in the “Submit master” tab — it goes live after admin review."
+                    : "Upload a master in the “Submit master” tab — it goes live once every file has arrived."}
               </p>
               <button type="button" onClick={() => setTab("upload")} className="mt-4 rounded-full bg-foreground px-4 py-2 text-sm text-background">
                 {fa ? "شروع کنید" : "Get started"}
@@ -365,6 +380,9 @@ export function ArtistStudio({ locale }: { locale: "fa" | "en" }) {
                         fill
                         sizes="128px"
                         className="object-cover"
+                        /* private until published: the optimizer fetches without the
+                           owner's cookie and would get a 404 — load it directly */
+                        unoptimized
                       />
                     )}
                   </div>
@@ -372,25 +390,29 @@ export function ArtistStudio({ locale }: { locale: "fa" | "en" }) {
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-medium">{fa ? asset.title.fa : asset.title.en}</h3>
-                      <Badge tone={STATUS_TONE[asset.status] ?? "neutral"}>
-                        {asset.status === "pending_review"
-                          ? fa
-                            ? "در صف بازبینی"
-                            : "In review"
-                          : asset.status === "approved"
+                      {asset.uploadState === "uploading" ? (
+                        <Badge tone="error">{fa ? "آپلود ناتمام" : "Upload incomplete"}</Badge>
+                      ) : (
+                        <Badge tone={STATUS_TONE[asset.status] ?? "neutral"}>
+                          {asset.status === "pending_review"
                             ? fa
-                              ? "منتشرشده"
-                              : "Published"
-                            : asset.status === "rejected"
+                              ? "در صف بازبینی"
+                              : "In review"
+                            : asset.status === "approved"
                               ? fa
-                                ? "رد شده"
-                                : "Rejected"
-                              : asset.status === "sold_exclusive"
+                                ? "منتشرشده"
+                                : "Published"
+                              : asset.status === "rejected"
                                 ? fa
-                                  ? "انحصاری فروخته شد"
-                                  : "Sold exclusively"
-                                : asset.status}
-                      </Badge>
+                                  ? "رد شده"
+                                  : "Rejected"
+                                : asset.status === "sold_exclusive"
+                                  ? fa
+                                    ? "انحصاری فروخته شد"
+                                    : "Sold exclusively"
+                                  : asset.status}
+                        </Badge>
+                      )}
                       {asset.familyId && <Badge tone="neutral">{familyName(asset.familyId, locale)}</Badge>}
                       {asset.visibility === "private" && asset.status === "approved" && <Badge tone="outline">{fa ? "پنهان" : "Hidden"}</Badge>}
                     </div>
@@ -435,12 +457,27 @@ export function ArtistStudio({ locale }: { locale: "fa" | "en" }) {
                         )}
                       </div>
                     )}
+                    {asset.uploadState === "uploading" && (
+                      <p className="mt-2 text-caption text-error">
+                        {fa
+                          ? "آپلود این اثر کامل نشد و همه‌ی فایل‌هایش به سرور نرسیده است؛ برای همین خصوصی مانده و در فروشگاه نمایش داده نمی‌شود. آن را دوباره از زبانه‌ی «آپلود اثر» بفرستید."
+                          : "This work's upload never completed and some files did not reach the server, so it stays private and is not in the shop. Send it again from the Upload tab."}
+                      </p>
+                    )}
                     {asset.rejectionNote && <p className="mt-2 text-caption text-error">{asset.rejectionNote}</p>}
 
                     <div className="mt-3 flex flex-wrap gap-2 text-caption">
-                      {asset.status === "approved" && (
+                      {asset.status === "approved" && asset.visibility === "public" && (
                         <Link href={href(locale, `/marketplace/${asset.slug}`)} className="rounded-full border border-border px-3 py-1.5">
                           {fa ? "مشاهده در فروشگاه" : "View in shop"}
+                        </Link>
+                      )}
+                      {asset.status === "approved" && asset.visibility === "public" && familyById(asset.familyId) && (
+                        <Link
+                          href={href(locale, `/shop?family=${familyById(asset.familyId)!.slug}`)}
+                          className="rounded-full border border-border px-3 py-1.5"
+                        >
+                          {fa ? `در دسته‌ی «${familyName(asset.familyId, locale)}»` : `In “${familyName(asset.familyId, locale)}”`}
                         </Link>
                       )}
                       {asset.media.tile && (
@@ -480,11 +517,23 @@ export function ArtistStudio({ locale }: { locale: "fa" | "en" }) {
           <h2 className="font-display text-h3">{fa ? "ارسال فایل مادر" : "Submit a master file"}</h2>
           <p className="mt-1 text-caption leading-relaxed text-foreground-secondary">
             {fa
-              ? "فایل شما خصوصی ذخیره می‌شود، اسکن ویروس می‌گردد، پیش‌نمایش واترمارک‌شده و ماکاپ ساخته می‌شود و برای بازبینی به مدیر می‌رود. فایل‌های بیش از ۲۰۰ مگابایت به‌صورت چندبخشی آپلود می‌شوند."
-              : "Your file is stored privately, virus-scanned, watermarked previews and mockups are generated, and it is queued for review. Files over 200 MB upload in chunks."}
+              ? `فایل‌ها خصوصی ذخیره می‌شوند، اسکن ویروس می‌شوند و پیش‌نمایش واترمارک‌دار و ماکاپ ساخته می‌شود. فایل‌های بزرگ تکه‌تکه و با بررسی چک‌سام هر تکه ارسال می‌شوند و در صورت قطعی اینترنت خودکار دوباره تلاش می‌شود. ${
+                  autoPublish === false
+                    ? "پس از رسیدن کامل همه‌ی فایل‌ها، اثر برای بازبینی به مدیر می‌رود."
+                    : "پس از اینکه سرور رسیدن کامل و سالم همه‌ی فایل‌ها را تأیید کرد، اثر در فروشگاه و زیر دسته‌ی انتخابی شما منتشر می‌شود."
+                }`
+              : `Files are stored privately, virus-scanned, and watermarked previews and mockups are generated. Large files travel in checksummed chunks that retry automatically if the connection drops. ${
+                  autoPublish === false
+                    ? "Once every file has arrived, the work is queued for review."
+                    : "Once the server confirms every file arrived whole, the work is published in the shop under the category you chose."
+                }`}
           </p>
           <div className="mt-5">
-            <MasterUploader onUploaded={() => void loadAll()} />
+            <MasterUploader
+              autoPublish={autoPublish ?? undefined}
+              onUploaded={() => void loadAll()}
+              onViewWorks={() => setTab("assets")}
+            />
           </div>
         </section>
       )}

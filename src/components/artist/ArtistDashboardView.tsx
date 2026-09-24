@@ -224,6 +224,9 @@ export function ArtistDashboardView({ locale, data }: { locale: Locale; data: Ar
           <ul className="mt-4 space-y-2.5 text-sm">
             <StatusRow label={fa ? "منتشرشده در فروشگاه" : "Live in the shop"} value={totals.live} tone="success" />
             <StatusRow label={fa ? "در انتظار بازبینی" : "Waiting for review"} value={totals.inReview} tone={pending ? "warning" : "neutral"} />
+            {totals.incomplete > 0 && (
+              <StatusRow label={fa ? "آپلود ناتمام (خصوصی)" : "Upload incomplete (private)"} value={totals.incomplete} tone="error" />
+            )}
             <StatusRow label={fa ? "رد شده" : "Rejected"} value={totals.rejected} tone={totals.rejected ? "error" : "neutral"} />
             <StatusRow label={fa ? "کل آثار" : "All works"} value={totals.works} tone="neutral" />
           </ul>
@@ -555,7 +558,8 @@ function WorkRow({ work, locale }: { work: DashboardWork; locale: Locale }) {
     <li className="flex flex-col gap-4 p-5 lg:flex-row lg:items-center">
       <span className="relative h-20 w-20 shrink-0 overflow-hidden rounded-xl bg-background-secondary">
         {work.preview ? (
-          <Image src={`/api/marketplace/media?key=${encodeURIComponent(work.preview)}`} alt="" fill sizes="80px" className="object-cover" />
+          /* unoptimized: unpublished previews are owner-only, the optimizer has no cookie */
+          <Image src={`/api/marketplace/media?key=${encodeURIComponent(work.preview)}`} alt="" fill sizes="80px" className="object-cover" unoptimized />
         ) : (
           <span className="flex h-full w-full items-center justify-center text-muted">
             <FileStack className="h-5 w-5" />
@@ -566,7 +570,11 @@ function WorkRow({ work, locale }: { work: DashboardWork; locale: Locale }) {
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <p className="font-medium">{t(work.title, locale)}</p>
-          <AssetStatusBadge status={work.status} fa={fa} />
+          {work.uploadState === "uploading" ? (
+            <Badge tone="error">{fa ? "آپلود ناتمام" : "Upload incomplete"}</Badge>
+          ) : (
+            <AssetStatusBadge status={work.status} fa={fa} />
+          )}
           {work.filesUpdatedAt && (
             <Badge tone="warning">{fa ? "فایل تازه — بازبینی دوباره" : "New files — re-review"}</Badge>
           )}

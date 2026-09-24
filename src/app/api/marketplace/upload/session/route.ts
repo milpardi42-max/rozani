@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
+import { MAX_MASTER_BYTES, ACCEPTED_MASTER_MIME, multipartThresholdFor, storageProvider } from "@/lib/marketplace/config";
 import {
-  MAX_MASTER_BYTES,
-  MULTIPART_PART_SIZE,
-  MULTIPART_THRESHOLD_BYTES,
-  ACCEPTED_MASTER_MIME,
-  storageProvider,
-} from "@/lib/marketplace/config";
-import { createUploadSession, getAssets, getUploadSession, abortUploadSession } from "@/lib/marketplace/assets";
+  abortUploadSession,
+  createUploadSession,
+  getAssets,
+  getUploadSession,
+  isCompleting,
+  isSha256Hex,
+  sessionPartCount,
+} from "@/lib/marketplace/assets";
 import { presignUpload, stagingPartKey } from "@/lib/marketplace/storage";
 import { formatAcceptError, normaliseColourwayId } from "@/lib/marketplace/upload-rules";
 import { fail, json, readJson, requireArtistOrAdmin } from "@/lib/marketplace/guard";
@@ -28,6 +30,10 @@ export const dynamic = "force-dynamic";
  *   • provider "local" → the client POSTs each chunk to `/upload/part`
  *
  * Both cases then call `/upload/complete`.
+ *
+ * Integrity: the browser may send `sha256` (hex digest of the whole file). The
+ * server then refuses to build the work unless the stored bytes hash to exactly
+ * that value; the exact `sizeBytes` is enforced either way.
  */
 export async function POST(request: Request) {
   const auth = await requireArtistOrAdmin();
@@ -51,11 +57,15 @@ export async function POST(request: Request) {
     formatId?: string;
     colourwayId?: string;
     colourway?: { name?: { fa?: string; en?: string }; hex?: string };
+    /** Hex SHA-256 of the whole file (optional; needs a secure browser context). */
+    sha256?: string;
     /** Colourways 2..n attach their files to the work created by colourway 1. */
     attachToAssetId?: string | null;
   }>(request);
 
   if (!body?.filename || !body.mime || !body.sizeBytes) return fail("invalid_payload");
+  if (!Number.isSafeInteger(body.sizeBytes) || body.sizeBytes <= 0) return fail("invalid_payload");
+  if (body.sha256 !== undefined && body.sha256 !== null && !isSha256Hex(body.sha256)) return fail("invalid_checksum", 400);
   /* Every work must be filed under a real product family — see `lib/data/families.ts`. */
   if (!isFamilyId(body.familyId)) return fail("invalid_family", 400);
   if (body.sizeBytes > MAX_MASTER_BYTES) {
@@ -106,6 +116,7 @@ export async function POST(request: Request) {
           }
         : null,
       attachToAssetId: body.attachToAssetId ?? null,
+      sha256: body.sha256 ?? null,
       meta: {
         title: {
           fa: body.title?.fa?.trim() || body.filename,
@@ -119,7 +130,7 @@ export async function POST(request: Request) {
       },
     });
 
-    const totalParts = session.mode === "multipart" ? Math.ceil(session.sizeBytes / MULTIPART_PART_SIZE) : 1;
+    const totalParts = session.mode === "multipart" ? sessionPartCount(session) : 1;
     const provider = storageProvider();
 
     /* S3: one presigned PUT per chunk, straight into the staging folder. */
@@ -135,15 +146,18 @@ export async function POST(request: Request) {
         mode: session.mode,
         key: session.key,
         sizeBytes: session.sizeBytes,
-        partSize: MULTIPART_PART_SIZE,
+        partSize: session.partSize,
         totalParts,
+        /* the id the file is filed under — the client echoes it when finalizing */
+        colourwayId: session.colourwayId ?? null,
+        checksum: session.sha256 ? "sha256" : null,
         partUrls,
         partEndpoint: provider === "s3" ? null : "/api/marketplace/upload/part",
         completeEndpoint: "/api/marketplace/upload/complete",
       },
       limits: {
         maxBytes: MAX_MASTER_BYTES,
-        thresholdBytes: MULTIPART_THRESHOLD_BYTES,
+        thresholdBytes: multipartThresholdFor(provider),
         accepted: Object.keys(ACCEPTED_MASTER_MIME),
         formats: EXPORT_FORMAT_IDS,
         minBytes: minUploadBytes(declaredFormat),
@@ -170,7 +184,7 @@ export async function GET(request: Request) {
   const session = await getUploadSession(id);
   if (!session || session.userId !== auth.user.id) return fail("not_found", 404);
 
-  const totalParts = session.mode === "multipart" ? Math.ceil(session.sizeBytes / MULTIPART_PART_SIZE) : 1;
+  const totalParts = session.mode === "multipart" ? sessionPartCount(session) : 1;
   const provider = storageProvider();
   return json({
     ok: true,
@@ -178,6 +192,9 @@ export async function GET(request: Request) {
       id: session.id,
       mode: session.mode,
       status: session.status,
+      /* a completion is running right now (the browser waits instead of re-sending) */
+      completing: isCompleting(session),
+      assetId: session.assetId ?? null,
       receivedParts: session.parts.map((part) => part.partNumber),
       bytesReceived: session.parts.reduce((sum, part) => sum + part.bytes, 0),
       totalParts,
@@ -201,7 +218,9 @@ export async function DELETE(request: Request) {
 
   const session = await getUploadSession(id);
   if (!session || session.userId !== auth.user.id) return fail("not_found", 404);
-  if (session.status === "completed") return fail("already_completed", 409);
+  if (session.status === "completed") return fail("already_completed", 409, { assetId: session.assetId ?? null });
+  /* Never pull the file out from under a completion that is running right now. */
+  if (isCompleting(session)) return fail("completing", 409);
 
   await abortUploadSession(id);
   const { deletePrefix, deleteObject } = await import("@/lib/marketplace/storage");

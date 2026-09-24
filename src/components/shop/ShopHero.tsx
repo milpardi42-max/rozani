@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { familyName } from "@/lib/data/families";
 import type { Locale } from "@/lib/i18n/types";
 import type { EnrichedProduct } from "@/lib/data/queries";
+import type { ShopWork } from "@/lib/marketplace/shop-works";
 import { faNum, formatPrice, href, t } from "@/lib/utils";
 
 export interface ShopFamilyChip {
@@ -22,6 +23,8 @@ interface Props {
   description: string;
   /** every product of the shop — the hero picks its tiles from them */
   products: EnrichedProduct[];
+  /** published artist works listed in the shop — counted in the live numbers */
+  works?: ShopWork[];
   families: ShopFamilyChip[];
   brand: string;
   labels: {
@@ -54,7 +57,7 @@ interface Props {
  * Only the hero changes; the shop itself (filters, sorting, sections) is
  * rendered by `ShopFiltered` exactly as before.
  */
-export function ShopHero({ locale, eyebrow, title, description, products, families, brand, labels, banner }: Props) {
+export function ShopHero({ locale, eyebrow, title, description, products, works = [], families, brand, labels, banner }: Props) {
   const fa = locale === "fa";
   const num = (n: number) => (fa ? faNum(n) : String(n));
 
@@ -62,11 +65,12 @@ export function ShopHero({ locale, eyebrow, title, description, products, famili
   const second = products.find((p) => p.id !== lead?.id && !p.artistId && p.isNew) ?? products.find((p) => p.id !== lead?.id);
 
   const familiesInUse = families.filter((f) => (f.count ?? 0) > 0).length;
-  const colourways = products.reduce((total, p) => total + p.colors.length, 0);
-  const makers = new Set(products.map((p) => p.artistId).filter(Boolean)).size;
+  const colourways =
+    products.reduce((total, p) => total + p.colors.length, 0) + works.reduce((total, work) => total + work.colourways.length, 0);
+  const makers = new Set([...products.map((p) => p.artistId), ...works.map((work) => work.artistId)].filter(Boolean)).size;
 
   const stats = [
-    { value: num(products.length), label: labels.products },
+    { value: num(products.length + works.length), label: labels.products },
     { value: `${num(familiesInUse)}/${num(families.length)}`, label: labels.productFamilies },
     { value: num(colourways), label: labels.colourways },
     { value: num(makers), label: labels.makers },

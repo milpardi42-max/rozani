@@ -1,6 +1,14 @@
-import { MULTIPART_PART_SIZE } from "@/lib/marketplace/config";
 import { minUploadBytes } from "@/lib/marketplace/formats";
-import { completeUpload, getOpenUploadSession, getUploadSession, abortUploadSession } from "@/lib/marketplace/assets";
+import {
+  abortUploadSession,
+  claimUploadSession,
+  completeUpload,
+  getOpenUploadSession,
+  getUploadSession,
+  releaseUploadSession,
+  sessionPartCount,
+} from "@/lib/marketplace/assets";
+import { DEFAULT_COLOURWAY_ID } from "@/lib/marketplace/colourways";
 import { deleteObject, deletePrefix } from "@/lib/marketplace/storage";
 import { fail, json, requireArtistOrAdmin } from "@/lib/marketplace/guard";
 import { scanBuffer } from "@/lib/marketplace/scanner";
@@ -19,8 +27,10 @@ export const maxDuration = 300;
  *     — the chunks previously POSTed to `/upload/part` are concatenated here
  *     (this is the path used for masters larger than the threshold).
  *
- * The pipeline then stores the master privately, scans it and builds the
- * watermarked derivatives + mockups before queueing it for admin review.
+ * The pipeline verifies the bytes (exact size, and the browser's SHA-256 when it
+ * sent one), stores the file privately, scans it and builds the watermarked
+ * derivatives + mockups. The work stays private: it is only published by
+ * `/upload/finalize`, after every file of the batch has been verified.
  */
 export async function POST(request: Request) {
   const auth = await requireArtistOrAdmin();
@@ -60,7 +70,7 @@ export async function POST(request: Request) {
   let buffer: Buffer | undefined;
 
   if (session.mode === "multipart" || session.parts.length > 1) {
-    const totalParts = Math.ceil(session.sizeBytes / MULTIPART_PART_SIZE);
+    const totalParts = sessionPartCount(session);
     const received = new Set(session.parts.map((part) => part.partNumber));
     const missing: number[] = [];
     for (let index = 1; index <= totalParts; index += 1) if (!received.has(index)) missing.push(index);
@@ -74,11 +84,22 @@ export async function POST(request: Request) {
     return fail("missing_body", 400);
   }
 
+  /* One completion per session: a retried request that races the original must
+     not build the work twice. The browser waits and asks again. */
+  if (!(await claimUploadSession(session.id))) return fail("completing", 409, { retryAfterMs: 2000 });
+
   try {
     const { asset, scan } = await completeUpload(session, { buffer });
 
     // Staging chunks are no longer needed once the master is stored.
     await deletePrefix(`private/staging/${session.id}`).catch(() => undefined);
+
+    /* What the server now holds for this file — the browser compares it with
+       its own size/hash and reports it back to `/upload/finalize`. */
+    const colourwayId = session.colourwayId ?? DEFAULT_COLOURWAY_ID;
+    const stored = (asset.colourways ?? [])
+      .find((colourway) => colourway.id === colourwayId)
+      ?.files.find((item) => item.formatId === session.formatId);
 
     return json({
       ok: true,
@@ -94,10 +115,26 @@ export async function POST(request: Request) {
         scan,
         master: { filename: asset.master.filename, sizeBytes: asset.master.sizeBytes, sha256: asset.master.sha256 },
       },
-      message: "queued_for_review",
+      file: stored
+        ? { colourwayId, formatId: stored.formatId, sizeBytes: stored.sizeBytes, sha256: stored.sha256, scan: stored.scanStatus ?? scan.status }
+        : null,
+      /* not public yet: `/upload/finalize` publishes once the whole batch is verified */
+      message: "stored_awaiting_finalize",
     });
   } catch (error) {
+    /* Nothing was built: let the session be retried (or aborted below). */
+    await releaseUploadSession(session.id).catch(() => undefined);
     const message = String(error);
+    if (message.includes("size_mismatch") || message.includes("checksum_mismatch")) {
+      /* The bytes are not the ones announced: nothing was kept, start this file over. */
+      const detail = error as { code?: string; expected?: number | string; received?: number | string };
+      await abortUploadSession(session.id).catch(() => undefined);
+      await deletePrefix(`private/staging/${session.id}`).catch(() => undefined);
+      return fail(message.includes("size_mismatch") ? "size_mismatch" : "checksum_mismatch", 422, {
+        expected: detail.expected ?? null,
+        received: detail.received ?? null,
+      });
+    }
     if (message.includes("file_too_small")) {
       return fail("file_too_small", 400, { minBytes: (error as { minBytes?: number }).minBytes ?? 0 });
     }

@@ -1,7 +1,6 @@
 import "server-only";
 import { capabilities, storageProvider, zarinpalMerchantId, stripeSecret, mailProvider, clamavHost } from "./config";
 import { filterAssets, getAssets, saveAsset, setAssetStatus, setAssetVisibility, updateAssetTiers, getSettings, saveSettings } from "./assets";
-import { deleteObject } from "./storage";
 import { getOrders, getLicenses, setOrderStatus, refundOrder, fulfillOrder } from "./orders";
 import { listPayouts } from "./payouts";
 import { getOutbox } from "./email";
@@ -45,7 +44,14 @@ export async function getReviewQueue(): Promise<ReviewQueueItem[]> {
     const owner = users.find((user) => user.id === asset.ownerUserId);
     const warnings: Localized[] = [];
 
-    if (asset.scan.status === "suspicious") {
+    if (asset.uploadState === "uploading") {
+      warnings.push({
+        fa: "آپلود این اثر نهایی نشده — ممکن است همه‌ی فایل‌ها نرسیده باشند",
+        en: "Upload never finalized — some files may be missing",
+      });
+    }
+    const flaggedFiles = (asset.colourways ?? []).some((colourway) => colourway.files.some((file) => file.scanStatus === "suspicious"));
+    if (asset.scan.status === "suspicious" || flaggedFiles) {
       warnings.push({ fa: "اسکنر ویروس موارد مشکوک پیدا کرد", en: "Virus scanner flagged suspicious content" });
     }
     if (asset.scan.status === "infected") {
@@ -330,10 +336,8 @@ export async function updateSettings(patch: Parameters<typeof saveSettings>[0]) 
 
 /** Frees storage of a rejected asset without deleting the record. */
 export async function purgeAssetObjects(asset: Asset): Promise<void> {
-  await deleteObject(asset.master.key).catch(() => undefined);
-  for (const file of [...asset.derivatives, ...asset.mockups]) {
-    await deleteObject(file.key).catch(() => undefined);
-  }
+  const { deleteAssetObjects } = await import("./assets");
+  await deleteAssetObjects(asset);
 }
 
 export type { AssetStatus, OutboxMessage };

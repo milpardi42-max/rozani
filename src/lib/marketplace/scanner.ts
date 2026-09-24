@@ -76,6 +76,20 @@ export interface HeuristicScanResult {
   detail?: string;
 }
 
+/**
+ * The printable-text runs (≥ 16 characters) of a binary slice.
+ *
+ * A script hidden in a file is text, so its markers always sit inside a long
+ * printable run. Compressed image data (PNG/JPEG/PSD) is statistically random:
+ * matched against the raw bytes, a short marker such as `WSO` + digit turned up
+ * by pure chance in ~2 % of large masters, which were then rejected as infected
+ * and deleted. Random bytes almost never form a 16-character printable run
+ * (≈ 1 in 10⁷ per MB), so real payloads are still caught and clean art is not.
+ */
+function textRuns(slice: string): string {
+  return (slice.match(/[\x20-\x7e\t\r\n]{16,}/g) ?? []).join("\n");
+}
+
 export function scanBufferHeuristic(buffer: Buffer, filename = ""): HeuristicScanResult {
   const threats: ScanThreat[] = [];
   const head = buffer.subarray(0, 4096);
@@ -95,8 +109,10 @@ export function scanBufferHeuristic(buffer: Buffer, filename = ""): HeuristicSca
     }
   }
 
+  const textHead = textRuns(asciiHead);
+  const textTail = textRuns(asciiTail);
   for (const marker of SCRIPT_MARKERS) {
-    if (marker.pattern.test(asciiHead) || marker.pattern.test(asciiTail)) {
+    if (marker.pattern.test(textHead) || marker.pattern.test(textTail)) {
       threats.push(threat(marker.threat, "high", marker.pattern.source.slice(0, 40)));
     }
   }

@@ -164,6 +164,8 @@ export interface ColourwayFile {
   height?: number;
   /** Set when the artist supplied this file as the storefront cover. */
   cover?: boolean;
+  /** Virus-scan verdict of this very file — a `suspicious` file keeps the work out of auto-publishing. */
+  scanStatus?: ScanReport["status"];
   uploadedAt: string;
 }
 
@@ -227,6 +229,14 @@ export interface Asset {
   status: AssetStatus;
   /** Public visibility switch (site-owned assets are public by default). */
   visibility: "public" | "private";
+  /**
+   * `uploading` while an upload batch is still adding files (the work stays
+   * private); `complete` once `/upload/finalize` verified every file. Missing on
+   * works created before batches were verified — treated as complete.
+   */
+  uploadState?: "uploading" | "complete";
+  /** When the last upload batch was verified complete. */
+  uploadFinalizedAt?: string;
   review: {
     reviewedBy?: string;
     reviewedAt?: string;
@@ -257,7 +267,13 @@ export interface UploadSession {
   mode: "single" | "multipart";
   /** Multipart chunk size used for this session. */
   partSize: number;
-  parts: { partNumber: number; bytes: number; etag: string }[];
+  /** `sha256` is the browser's hash of the chunk, verified against the bytes that arrived. */
+  parts: { partNumber: number; bytes: number; etag: string; sha256?: string }[];
+  /**
+   * SHA-256 of the whole file as computed by the browser (optional — hashing needs
+   * a secure context). When present the stored bytes must match it exactly.
+   */
+  sha256?: string;
   /** Filesystem staging dir (local provider) or S3 uploadId, per provider. */
   staging?: string;
   s3UploadId?: string;
@@ -283,6 +299,11 @@ export interface UploadSession {
     tiers: LicenseTier[];
   };
   status: "open" | "completed" | "aborted";
+  /**
+   * Set while one request is completing the session, so a retried request
+   * cannot build the same work twice. Stale after 10 minutes (crashed worker).
+   */
+  completingSince?: string;
   createdAt: string;
   completedAt?: string;
   /** Asset created on completion. */

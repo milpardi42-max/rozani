@@ -7,11 +7,13 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
+  Clock3,
   Copy,
   FileUp,
   Loader2,
   Palette,
   Plus,
+  RotateCcw,
   ShieldCheck,
   Trash2,
   UploadCloud,
@@ -19,7 +21,6 @@ import {
 } from "lucide-react";
 import { useLocale } from "@/components/providers/AppProviders";
 import { Field, Input } from "@/components/ui/Input";
-import { SESSION_FETCH } from "@/lib/http";
 import { PRODUCT_FAMILIES, familyById } from "@/lib/data/families";
 import {
   EXPORT_FORMATS,
@@ -29,6 +30,19 @@ import {
   type ExportFormatId,
 } from "@/lib/marketplace/formats";
 import { COLOUR_PRESETS, contrastingInk, sanitizeHex } from "@/lib/marketplace/colourways";
+import {
+  UploadError,
+  WHOLE_FILE_HASH_LIMIT,
+  describeUploadError,
+  getJson,
+  postForm,
+  postJson,
+  putChunk,
+  sha256Hex,
+  sleep,
+  withRetry,
+  type ApiBody,
+} from "@/lib/marketplace/upload-client";
 import { cn, faNum, href } from "@/lib/utils";
 
 /**
@@ -40,6 +54,16 @@ import { cn, faNum, href } from "@/lib/utils";
  * first one creates the work, the rest are attached to it — reusing the same
  * session/part/complete pipeline as a single master file (including chunked
  * uploads above the multipart threshold).
+ *
+ * Nothing is claimed before the server confirms it:
+ *   • every file (and every chunk) carries its SHA-256; the server refuses bytes
+ *     that do not match, and transient failures are retried automatically;
+ *   • a slot only turns “stored” once the server answered with that exact size
+ *     (and hash);
+ *   • after the last file, `/upload/finalize` compares the whole batch with what
+ *     the server holds. Only then is the work published (or queued for review,
+ *     if the admin turned immediate publishing off) — a half-uploaded work never
+ *     reaches the shop, and a failed batch resumes where it stopped.
  */
 
 interface SessionInfo {
@@ -51,28 +75,41 @@ interface SessionInfo {
   partUrls: string[] | null;
   partEndpoint: string | null;
   completeEndpoint: string;
+  /** The (normalised) colourway id the server files this upload under. */
+  colourwayId?: string | null;
 }
 
-interface UploadResult {
+/** Answer of `/upload/finalize` — the only source of truth for the result panel. */
+interface FinalizeResponse {
   ok: boolean;
-  asset?: {
-    id: string;
-    slug: string;
-    status: string;
-    title?: { fa: string; en: string };
-    previewKey?: string;
-    tileKey?: string;
-    mockups: number;
-    seamless: { verdict: string; score: number };
-    scan: { engine: string; status: string; threats: { id: string; label: { fa: string; en: string } }[] };
-    master: { filename: string; sizeBytes: number; sha256: string };
-    formats?: string[];
-    colourways?: number;
-  };
-  error?: string;
-  message?: string;
-  detail?: string;
-  formatId?: string;
+  published: boolean;
+  reason:
+    | "auto_published"
+    | "auto_approved_seamless"
+    | "already_published"
+    | "review_required"
+    | "suspicious_file"
+    | "hidden_by_admin"
+    | "rejected";
+  verified: { files: number; bytes: number };
+  asset: { id: string; slug: string; title: { fa: string; en: string }; status: string; visibility: string; familyId: string | null };
+  links: { work: string | null; category: string | null };
+  family: { id: string; slug: string; name: { fa: string; en: string } } | null;
+}
+
+interface FinalizeProblem {
+  colourwayId: string;
+  formatId: string;
+  problem: "missing" | "size_mismatch" | "checksum_mismatch" | "object_missing";
+}
+
+/** A file the server confirmed it holds, byte for byte. */
+interface StoredFile {
+  file: File;
+  colourwayId: string;
+  formatId: ExportFormatId;
+  sizeBytes: number;
+  sha256: string | null;
 }
 
 interface DraftColourway {
@@ -85,7 +122,17 @@ interface DraftColourway {
 }
 
 type Phase = "idle" | "uploading" | "done" | "error";
-type SlotState = { state: "queued" | "uploading" | "done" | "error"; percent: number; error?: string };
+type SlotState = { state: "queued" | "uploading" | "done" | "error"; percent: number; error?: string; note?: string };
+
+const BLANK_META = {
+  titleFa: "",
+  titleEn: "",
+  kind: "pattern",
+  tags: "",
+  descriptionFa: "",
+  /* The real product category — required, see `lib/data/families.ts`. */
+  familyId: "",
+};
 
 const FORMAT_ACCEPT: Record<ExportFormatId, string> = {
   png: ".png,image/png",
@@ -126,7 +173,17 @@ function fileSize(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-export function MasterUploader({ onUploaded }: { onUploaded?: () => void }) {
+export function MasterUploader({
+  onUploaded,
+  onViewWorks,
+  autoPublish,
+}: {
+  onUploaded?: () => void;
+  /** Opens the studio's “My works” tab. */
+  onViewWorks?: () => void;
+  /** The admin's publishing policy (`undefined` while unknown) — only words the promises; the result comes from the server. */
+  autoPublish?: boolean;
+}) {
   const { locale } = useLocale();
   const fa = locale === "fa";
   const router = useRouter();
@@ -135,24 +192,20 @@ export function MasterUploader({ onUploaded }: { onUploaded?: () => void }) {
   const [status, setStatus] = useState("");
   const [progress, setProgress] = useState(0);
   const [slots, setSlots] = useState<Record<string, SlotState>>({});
-  const [result, setResult] = useState<UploadResult | null>(null);
+  const [result, setResult] = useState<FinalizeResponse | null>(null);
+  const [problems, setProblems] = useState<string[]>([]);
   const [redirectIn, setRedirectIn] = useState<number | null>(null);
+  const [autoRedirect, setAutoRedirect] = useState(true);
   const [dragging, setDragging] = useState<string | null>(null);
   const inputs = useRef<Record<string, HTMLInputElement | null>>({});
 
-  const [meta, setMeta] = useState({
-    titleFa: "",
-    titleEn: "",
-    kind: "pattern",
-    tags: "",
-    descriptionFa: "",
-    /* The real product category — required, see `lib/data/families.ts`. */
-    familyId: "",
-  });
+  const [meta, setMeta] = useState(BLANK_META);
   const [colourways, setColourways] = useState<DraftColourway[]>([blankColourway(0)]);
 
   const chosenFamily = familyById(meta.familyId);
-  const categoryHref = chosenFamily ? `${href(locale, "/shop")}?family=${chosenFamily.slug}` : null;
+  /* Only a work the server actually published sends the artist to the shop. */
+  const categoryHref = result?.published && result.links.category ? href(locale, result.links.category) : null;
+  const workHref = result?.published && result.links.work ? href(locale, result.links.work) : null;
 
   /* ---------- derived state ---------- */
   const attached = useMemo(
@@ -181,10 +234,6 @@ export function MasterUploader({ onUploaded }: { onUploaded?: () => void }) {
   }, [attached]);
 
   const formatsPresent = useMemo(() => [...new Set(attached.map((item) => item.formatId))], [attached]);
-  const coloursWithFiles = useMemo(
-    () => colourways.filter((colourway) => Object.keys(colourway.files).length > 0).length,
-    [colourways],
-  );
   const ready = Boolean(chosenFamily) && meta.titleFa.trim().length > 0 && queue.length > 0;
   const busy = phase === "uploading";
 
@@ -238,203 +287,379 @@ export function MasterUploader({ onUploaded }: { onUploaded?: () => void }) {
     setColourways((current) => (current.length > 1 ? current.filter((colourway) => colourway.id !== id) : current));
 
   /* ---------- upload ---------- */
+  type QueueItem = (typeof attached)[number];
+
+  /**
+   * What already reached the server in this batch, so pressing the button again
+   * resumes instead of starting over: the work id (created by the first file) and
+   * every file the server confirmed, per slot. A slot whose file was swapped is
+   * sent again; changing the work's details starts a fresh work.
+   */
+  const resume = useRef<{ fingerprint: string; workId: string | null; stored: Map<string, StoredFile> }>({
+    fingerprint: "",
+    workId: null,
+    stored: new Map(),
+  });
+
+  const setSlot = useCallback(
+    (key: string, patch: Partial<SlotState>) =>
+      setSlots((current) => ({ ...current, [key]: { ...(current[key] ?? { state: "queued", percent: 0 }), ...patch } })),
+    [],
+  );
+
+  /**
+   * Sessions of files that failed for good. They are closed on the server so the
+   * studio's "unfinished uploads" list does not fill up with dead attempts — right
+   * away if the network allows, otherwise at the next attempt. The server refuses
+   * (409) to close a session whose completion is still running; those are kept.
+   */
+  const abandoned = useRef<Set<string>>(new Set());
+  const flushAbandoned = useCallback(() => {
+    for (const id of [...abandoned.current]) {
+      fetch(`/api/marketplace/upload/session?id=${encodeURIComponent(id)}`, { method: "DELETE", credentials: "same-origin", cache: "no-store" })
+        .then(async (response) => {
+          const data = (await response.json().catch(() => ({}))) as { error?: string };
+          if (response.ok || response.status === 404 || data.error === "already_completed") abandoned.current.delete(id);
+        })
+        .catch(() => undefined);
+    }
+  }, []);
+
   const sendFile = useCallback(
-    async (item: (typeof attached)[number], workId: string | null): Promise<{ workId: string | null; result: UploadResult }> => {
+    async (item: QueueItem, workId: string | null): Promise<StoredFile & { workId: string }> => {
       const key = slotKey(item.colourwayId, item.formatId);
-      const setSlot = (patch: Partial<SlotState>) =>
-        setSlots((current) => ({ ...current, [key]: { ...(current[key] ?? { state: "queued", percent: 0 }), ...patch } }));
+      const onRetry = (attempt: number) =>
+        setSlot(key, { note: fa ? `اتصال ناپایدار — تلاش دوباره (${faNum(attempt + 1)})…` : `unstable connection — retry ${attempt + 1}…` });
+      const percentOf = (bytes: number) => 4 + Math.round((Math.min(bytes, item.file.size) / Math.max(1, item.file.size)) * 86);
 
-      setSlot({ state: "uploading", percent: 4, error: undefined });
+      setSlot(key, { state: "uploading", percent: 1, error: undefined, note: fa ? "محاسبه‌ی چک‌سام…" : "checksumming…" });
+      /* the session of the attempt in flight — closed if this file fails for good */
+      let openSession: string | null = null;
+      const wholeHash = item.file.size <= WHOLE_FILE_HASH_LIMIT ? await sha256Hex(item.file) : null;
+      setSlot(key, { percent: 4, note: undefined });
 
-      const sessionResponse = await fetch("/api/marketplace/upload/session", {
-        ...SESSION_FETCH,
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          filename: item.file.name,
-          sizeBytes: item.file.size,
-          mime: item.file.type || "application/octet-stream",
-          title: { fa: meta.titleFa || item.file.name, en: meta.titleEn || item.file.name },
-          description: { fa: meta.descriptionFa, en: "" },
-          kind: meta.kind,
-          familyId: meta.familyId,
-          tags: meta.tags
-            .split(/[,،]/)
-            .map((tag) => tag.trim())
-            .filter(Boolean),
-          formatId: item.formatId,
-          colourwayId: item.colourwayId,
-          colourway: { name: item.colourwayName, hex: item.hex },
-          attachToAssetId: workId,
-        }),
-      });
-      const sessionData = (await sessionResponse.json()) as {
-        ok?: boolean;
-        error?: string;
-        session?: SessionInfo;
-        limits?: { maxBytes: number };
-      };
-      if (!sessionData.ok || !sessionData.session) {
-        const message =
-          sessionData.error === "unsupported_type"
-            ? fa
-              ? `فایل انتخاب‌شده با فرمت ${formatLabel(item.formatId, "fa")} نمی‌خواند.`
-              : `The file does not match the ${formatLabel(item.formatId, "en")} slot.`
-            : sessionData.error === "raster_required"
-              ? fa
-                ? "اولین فایل هر اثر باید PNG یا JPG باشد."
-                : "The first file of a work must be PNG or JPG."
-              : sessionData.error === "file_too_large"
-                ? fa
-                  ? `حجم فایل بیش از حد مجاز است (حداکثر ${Math.round((sessionData.limits?.maxBytes ?? 0) / 1024 / 1024)} مگابایت).`
-                  : `File is too large (max ${Math.round((sessionData.limits?.maxBytes ?? 0) / 1024 / 1024)} MB).`
-                : sessionData.error === "file_too_small"
-                  ? fa
-                    ? "این فایل خالی یا ناقص است."
-                    : "This file looks empty or truncated."
-                  : sessionData.error === "invalid_signature"
-                    ? fa
-                      ? "محتوای فایل با فرمت انتخابی نمی‌خواند (فایل واقعی آن فرمت نیست)."
-                      : "The file's contents are not really in this format."
-                    : sessionData.error ?? "session_failed";
-        setSlot({ state: "error", error: message });
-        throw new Error(message);
-      }
-
-      const session = sessionData.session;
-
-      if (session.mode === "single") {
-        const form = new FormData();
-        form.set("sessionId", session.id);
-        form.set("file", item.file);
-        setSlot({ percent: 45 });
-        const response = await fetch(session.completeEndpoint, { ...SESSION_FETCH, method: "POST", body: form });
-        const data = (await response.json()) as UploadResult;
-        if (!data.ok) {
-          setSlot({ state: "error", error: data.error ?? "upload_failed" });
-          throw new Error(data.error ?? "upload_failed");
+      /* A completion whose answer was lost (or that is still running) must not be
+         repeated: wait for the server and adopt the work it built. */
+      const waitForCompletion = async (sessionId: string): Promise<ApiBody | null> => {
+        setSlot(key, { note: fa ? "در انتظار پایان پردازش روی سرور…" : "waiting for the server to finish…" });
+        for (let poll = 0; poll < 120; poll += 1) {
+          await sleep(3000);
+          const state = await getJson(`/api/marketplace/upload/session?id=${encodeURIComponent(sessionId)}`).catch(() => null);
+          const info = state?.session as { status?: string; completing?: boolean; assetId?: string | null } | undefined;
+          if (!info) continue;
+          if (info.status === "completed" && info.assetId) return { ok: true, asset: { id: info.assetId }, file: null };
+          if (info.status === "aborted") throw new UploadError("session_not_found", 404);
+          if (!info.completing) return null; // the other attempt failed — complete it ourselves
         }
-        setSlot({ state: "done", percent: 100 });
-        return { workId: data.asset?.id ?? workId, result: data };
-      }
+        throw new UploadError("timeout", 0);
+      };
 
-      /* ---------- chunked ---------- */
-      const total = session.totalParts;
-      let sentBytes = 0;
-      for (let index = 0; index < total; index += 1) {
-        const partNumber = index + 1;
-        const start = index * session.partSize;
-        const chunk = item.file.slice(start, Math.min(start + session.partSize, item.file.size));
-
-        if (session.partUrls?.[index]) {
-          const put = await fetch(session.partUrls[index], { method: "PUT", body: chunk });
-          if (!put.ok) throw new Error(`s3_part_${partNumber}_${put.status}`);
-          await fetch(session.partEndpoint ?? "/api/marketplace/upload/part", {
-            ...SESSION_FETCH,
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ sessionId: session.id, partNumber, bytes: chunk.size, etag: put.headers.get("etag") ?? "" }),
-          });
-        } else {
-          const form = new FormData();
-          form.set("sessionId", session.id);
-          form.set("partNumber", String(partNumber));
-          form.set("file", new File([chunk], `${partNumber}.part`));
-          const response = await fetch(session.partEndpoint ?? "/api/marketplace/upload/part", {
-            ...SESSION_FETCH,
-            method: "POST",
-            body: form,
-          });
-          if (!response.ok) {
-            const problem = (await response.json().catch(() => ({}))) as { error?: string };
-            throw new Error(problem.error ?? `part_${partNumber}_failed`);
+      const complete = async (sessionId: string, run: () => Promise<ApiBody>): Promise<ApiBody> => {
+        for (let round = 0; round < 3; round += 1) {
+          try {
+            return await withRetry(run, { onRetry });
+          } catch (error) {
+            if (error instanceof UploadError && error.code === "already_completed" && error.detail.assetId) {
+              return { ok: true, asset: { id: String(error.detail.assetId) }, file: null };
+            }
+            if (error instanceof UploadError && error.code === "completing") {
+              const adopted = await waitForCompletion(sessionId);
+              if (adopted) return adopted;
+              continue;
+            }
+            throw error;
           }
         }
-        sentBytes += chunk.size;
-        setSlot({ percent: Math.min(92, Math.round((sentBytes / item.file.size) * 100)) });
-      }
+        throw new UploadError("server_error", 500);
+      };
 
-      const completeResponse = await fetch(session.completeEndpoint, {
-        ...SESSION_FETCH,
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sessionId: session.id }),
-      });
-      const completeData = (await completeResponse.json()) as UploadResult;
-      if (!completeData.ok) {
-        setSlot({ state: "error", error: completeData.error ?? "complete_failed" });
-        throw new Error(completeData.error ?? "complete_failed");
+      /* One full pass over this file with a fresh session. */
+      const attempt = async (): Promise<StoredFile & { workId: string }> => {
+        const opened = await withRetry(
+          () =>
+            postJson("/api/marketplace/upload/session", {
+              filename: item.file.name,
+              sizeBytes: item.file.size,
+              mime: item.file.type || "application/octet-stream",
+              sha256: wholeHash ?? undefined,
+              title: { fa: meta.titleFa || item.file.name, en: meta.titleEn || item.file.name },
+              description: { fa: meta.descriptionFa, en: "" },
+              kind: meta.kind,
+              familyId: meta.familyId,
+              tags: meta.tags
+                .split(/[,،]/)
+                .map((tag) => tag.trim())
+                .filter(Boolean),
+              formatId: item.formatId,
+              colourwayId: item.colourwayId,
+              colourway: { name: item.colourwayName, hex: item.hex },
+              attachToAssetId: workId,
+            }),
+          { onRetry },
+        );
+        const session = opened.session as SessionInfo | undefined;
+        if (!session?.id) throw new UploadError("bad_response", 200);
+        openSession = session.id;
+
+        let completed: ApiBody;
+        if (session.mode === "single") {
+          completed = await complete(session.id, () => {
+            const form = new FormData();
+            form.set("sessionId", session.id);
+            form.set("file", item.file);
+            return postForm(session.completeEndpoint, form, (fraction) => setSlot(key, { percent: percentOf(item.file.size * fraction) }));
+          });
+        } else {
+          let sent = 0;
+          for (let index = 0; index < session.totalParts; index += 1) {
+            const partNumber = index + 1;
+            const start = index * session.partSize;
+            const chunk = item.file.slice(start, Math.min(start + session.partSize, item.file.size));
+            const chunkHash = await sha256Hex(chunk);
+            await withRetry(
+              async () => {
+                const partUrl = session.partUrls?.[index];
+                if (partUrl) {
+                  const etag = await putChunk(partUrl, chunk);
+                  const registered = await postJson(session.partEndpoint ?? "/api/marketplace/upload/part", {
+                    sessionId: session.id,
+                    partNumber,
+                    bytes: chunk.size,
+                    etag,
+                  });
+                  if (Number(registered.bytes) !== chunk.size) throw new UploadError("part_size_mismatch", 422, { partNumber });
+                  return;
+                }
+                const form = new FormData();
+                form.set("sessionId", session.id);
+                form.set("partNumber", String(partNumber));
+                if (chunkHash) form.set("sha256", chunkHash);
+                form.set("file", new File([chunk], `${partNumber}.part`));
+                const stored = await postForm(session.partEndpoint ?? "/api/marketplace/upload/part", form, (fraction) =>
+                  setSlot(key, { percent: percentOf(sent + chunk.size * fraction) }),
+                );
+                /* the server says how many bytes of this chunk it kept — they must all be there */
+                if (Number(stored.bytes) !== chunk.size || (chunkHash && stored.sha256 && stored.sha256 !== chunkHash)) {
+                  throw new UploadError("part_corrupted", 422, { partNumber });
+                }
+              },
+              { onRetry },
+            );
+            sent += chunk.size;
+            setSlot(key, { percent: percentOf(sent), note: undefined });
+          }
+          setSlot(key, { note: fa ? "سرهم‌کردن تکه‌ها و بررسی چک‌سام…" : "assembling chunks & verifying…" });
+          completed = await complete(session.id, () => postJson(session.completeEndpoint, { sessionId: session.id }));
+        }
+
+        const asset = completed.asset as { id?: string } | undefined;
+        const file = completed.file as { sizeBytes?: number; sha256?: string } | null | undefined;
+        if (!asset?.id) throw new UploadError("bad_response", 200);
+        openSession = null; // completed: nothing to clean up
+        /* Trust, but verify: what the server says it stored must be this very file. */
+        if (file && file.sizeBytes !== item.file.size) throw new UploadError("size_mismatch", 422);
+        if (file && wholeHash && file.sha256 && file.sha256 !== wholeHash) throw new UploadError("checksum_mismatch", 422);
+        return {
+          workId: asset.id,
+          file: item.file,
+          colourwayId: session.colourwayId ?? item.colourwayId,
+          formatId: item.formatId,
+          sizeBytes: item.file.size,
+          sha256: wholeHash,
+        };
+      };
+
+      try {
+        let stored: StoredFile & { workId: string };
+        try {
+          stored = await attempt();
+        } catch (error) {
+          /* The server refused what arrived (and discarded it): send the file once more from scratch. */
+          const restart =
+            error instanceof UploadError && ["size_mismatch", "checksum_mismatch", "missing_parts", "session_not_found"].includes(error.code);
+          if (!restart) throw error;
+          setSlot(key, { percent: 4, note: fa ? "فایل ناقص رسید — ارسال دوباره…" : "arrived incomplete — sending again…" });
+          stored = await attempt();
+        }
+        setSlot(key, { state: "done", percent: 100, note: undefined });
+        return stored;
+      } catch (error) {
+        if (openSession) {
+          abandoned.current.add(openSession);
+          flushAbandoned();
+        }
+        const message = describeUploadError(error, locale, { format: formatLabel(item.formatId, locale) });
+        setSlot(key, { state: "error", error: message, note: undefined });
+        throw new UploadError(error instanceof UploadError ? error.code : "network", error instanceof UploadError ? error.status : 0, {
+          message,
+        });
       }
-      setSlot({ state: "done", percent: 100 });
-      return { workId: completeData.asset?.id ?? workId, result: completeData };
     },
-    [fa, meta],
+    [fa, flushAbandoned, locale, meta, setSlot],
+  );
+
+  const problemLabel = useCallback(
+    (problem: FinalizeProblem["problem"]) =>
+      ({
+        missing: fa ? "به سرور نرسید" : "never reached the server",
+        size_mismatch: fa ? "ناقص رسید (حجم متفاوت)" : "arrived with a different size",
+        checksum_mismatch: fa ? "محتوا با فایل شما یکی نیست" : "contents differ from your file",
+        object_missing: fa ? "نسخه‌ی ذخیره‌شده ناقص یا گم شده است" : "stored copy is missing or short",
+      })[problem],
+    [fa],
   );
 
   const uploadAll = useCallback(async () => {
+    const fingerprint = JSON.stringify(meta);
+    if (resume.current.fingerprint !== fingerprint) resume.current = { fingerprint, workId: null, stored: new Map() };
+    const state = resume.current;
+    const isStored = (item: QueueItem) =>
+      Boolean(state.workId) && state.stored.get(slotKey(item.colourwayId, item.formatId))?.file === item.file;
+
+    flushAbandoned(); // the network may be back: close sessions a previous attempt left open
     setPhase("uploading");
     setResult(null);
+    setProblems([]);
+    setRedirectIn(null);
+    setAutoRedirect(true);
     setSlots(
-      Object.fromEntries(queue.map((item) => [slotKey(item.colourwayId, item.formatId), { state: "queued" as const, percent: 0 }])),
+      Object.fromEntries(
+        queue.map((item) => [
+          slotKey(item.colourwayId, item.formatId),
+          isStored(item) ? { state: "done" as const, percent: 100 } : { state: "queued" as const, percent: 0 },
+        ]),
+      ),
     );
-    setProgress(0);
 
-    let workId: string | null = null;
-    let done = 0;
+    const totalBytes = Math.max(1, queue.reduce((sum, item) => sum + item.file.size, 0));
+    let doneBytes = queue.filter(isStored).reduce((sum, item) => sum + item.file.size, 0);
+    setProgress(Math.round((doneBytes / totalBytes) * 95));
+
     let failure: string | null = null;
-    let last: UploadResult | null = null;
-
+    let position = 0;
     for (const item of queue) {
+      position += 1;
+      if (isStored(item)) continue;
       setStatus(
         fa
-          ? `بارگذاری ${formatLabel(item.formatId, "fa")} · رنگ «${item.colourwayName.fa}» — فایل ${faNum(done + 1)} از ${faNum(queue.length)}`
-          : `Uploading ${formatLabel(item.formatId, "en")} · «${item.colourwayName.en}» — file ${done + 1} of ${queue.length}`,
+          ? `بارگذاری ${formatLabel(item.formatId, "fa")} · رنگ «${item.colourwayName.fa}» — فایل ${faNum(position)} از ${faNum(queue.length)}`
+          : `Uploading ${formatLabel(item.formatId, "en")} · «${item.colourwayName.en}» — file ${position} of ${queue.length}`,
       );
       try {
-        const sent = await sendFile(item, workId);
-        workId = sent.workId;
-        last = sent.result;
-        done += 1;
-        setProgress(Math.round((done / queue.length) * 100));
+        const sent = await sendFile(item, state.workId);
+        state.workId = sent.workId;
+        state.stored.set(slotKey(item.colourwayId, item.formatId), {
+          file: sent.file,
+          colourwayId: sent.colourwayId,
+          formatId: sent.formatId,
+          sizeBytes: sent.sizeBytes,
+          sha256: sent.sha256,
+        });
+        doneBytes += item.file.size;
+        setProgress(Math.round((doneBytes / totalBytes) * 95));
       } catch (error) {
-        failure = String(error).slice(0, 200);
+        failure = error instanceof UploadError ? String(error.detail.message ?? error.code) : String(error);
         break;
       }
     }
 
-    if (failure || !workId) {
+    if (failure || !state.workId) {
+      const kept = queue.filter(isStored).length;
       setPhase("error");
-      setStatus(failure ?? (fa ? "بارگذاری کامل نشد." : "The upload did not complete."));
+      setStatus(
+        (failure ?? (fa ? "بارگذاری کامل نشد." : "The upload did not complete.")) +
+          (kept
+            ? fa
+              ? ` — ${faNum(kept)} از ${faNum(queue.length)} فایل کامل رسیده و محفوظ است. اثر تا رسیدن همه‌ی فایل‌ها خصوصی می‌ماند و منتشر نمی‌شود.`
+              : ` — ${kept} of ${queue.length} files arrived intact and are kept. The work stays private until every file has arrived.`
+            : ""),
+      );
+      if (state.workId) onUploaded?.();
       return;
     }
 
-    setResult(
-      last
-        ? {
-            ...last,
-            asset: last.asset ? { ...last.asset, formats: formatsPresent, colourways: coloursWithFiles } : last.asset,
+    /* ---------- the server checks the whole batch, then publishes ---------- */
+    setStatus(fa ? "بررسی نهایی: مقایسه‌ی همه‌ی فایل‌ها با نسخه‌ی ذخیره‌شده روی سرور…" : "Final check: comparing every file with what the server stored…");
+    const manifest = queue.map((item) => {
+      const stored = state.stored.get(slotKey(item.colourwayId, item.formatId))!;
+      return { colourwayId: stored.colourwayId, formatId: stored.formatId, sizeBytes: stored.sizeBytes, sha256: stored.sha256 };
+    });
+    try {
+      const data = (await withRetry(() => postJson("/api/marketplace/upload/finalize", { assetId: state.workId, files: manifest }))) as unknown as FinalizeResponse;
+      setResult(data);
+      setPhase("done");
+      setProgress(100);
+      setStatus("");
+      resume.current = { fingerprint: "", workId: null, stored: new Map() };
+      onUploaded?.();
+    } catch (error) {
+      if (error instanceof UploadError && error.code === "incomplete_upload") {
+        const list = (Array.isArray(error.detail.problems) ? error.detail.problems : []) as FinalizeProblem[];
+        const lines: string[] = [];
+        for (const problem of list) {
+          const item = queue.find(
+            (candidate) =>
+              candidate.formatId === problem.formatId &&
+              (state.stored.get(slotKey(candidate.colourwayId, candidate.formatId))?.colourwayId ?? candidate.colourwayId) === problem.colourwayId,
+          );
+          const name = item ? `${item.colourwayName[locale] ?? item.colourwayName.fa} · ${formatLabel(problem.formatId as ExportFormatId, locale)}` : problem.formatId;
+          lines.push(`${name}: ${problemLabel(problem.problem)}`);
+          if (item) {
+            const key = slotKey(item.colourwayId, item.formatId);
+            state.stored.delete(key); // re-sent on resume
+            setSlot(key, { state: "error", percent: 0, error: problemLabel(problem.problem) });
           }
-        : null,
-    );
-    setPhase("done");
-    setProgress(100);
-    setStatus("");
-    onUploaded?.();
-  }, [coloursWithFiles, fa, formatsPresent, onUploaded, queue, sendFile]);
+        }
+        setProblems(lines);
+        setStatus(
+          fa
+            ? `سرور ${faNum(list.length)} فایل را کامل دریافت نکرده است؛ اثر خصوصی ماند و منتشر نشد. «ادامه‌ی آپلود» را بزنید تا فقط همین فایل‌ها دوباره فرستاده شوند.`
+            : `The server did not receive ${list.length} file(s) intact; the work stayed private. Press “Resume upload” to re-send just those files.`,
+        );
+      } else {
+        setStatus(describeUploadError(error, locale));
+      }
+      setPhase("error");
+      onUploaded?.();
+    }
+  }, [fa, flushAbandoned, locale, meta, onUploaded, problemLabel, queue, sendFile, setSlot]);
 
-  /* The artist lands on the category they picked — their new work is filed there. */
+  /** Clears the form for the next work (the category is kept — artists often upload a series). */
+  const startAnother = () => {
+    flushAbandoned();
+    resume.current = { fingerprint: "", workId: null, stored: new Map() };
+    setMeta((current) => ({ ...BLANK_META, familyId: current.familyId }));
+    setColourways([blankColourway(0)]);
+    setSlots({});
+    setResult(null);
+    setProblems([]);
+    setProgress(0);
+    setStatus("");
+    setRedirectIn(null);
+    setAutoRedirect(true);
+    setPhase("idle");
+  };
+
+  /* A published work: take the artist to its category, where it now appears. */
   useEffect(() => {
-    if (!categoryHref || phase !== "done") return;
-    setRedirectIn(5);
+    if (!categoryHref || phase !== "done" || !autoRedirect) {
+      setRedirectIn(null);
+      return;
+    }
+    setRedirectIn(8);
     const tick = setInterval(() => setRedirectIn((value) => (value === null ? null : Math.max(0, value - 1))), 1000);
-    const jump = setTimeout(() => router.push(categoryHref), 5000);
+    const jump = setTimeout(() => router.push(categoryHref), 8000);
     return () => {
       clearInterval(tick);
       clearTimeout(jump);
     };
-  }, [categoryHref, phase, router]);
+  }, [autoRedirect, categoryHref, phase, router]);
 
-  const uploadedFiles = Object.values(slots).filter((slot) => slot.state === "done").length;
+  /* After a failure, files the server already confirmed are not sent again. */
+  const keptFiles = phase === "error" ? queue.filter((item) => slots[slotKey(item.colourwayId, item.formatId)]?.state === "done").length : 0;
+  const resumable = keptFiles > 0;
+  const remainingFiles = queue.length - keptFiles;
+
 
   return (
     <div className="space-y-6">
@@ -442,9 +667,17 @@ export function MasterUploader({ onUploaded }: { onUploaded?: () => void }) {
       <Field
         label={fa ? "دسته‌بندی اصلی محصول" : "Main product category"}
         hint={
-          fa
-            ? "محصول شما زیر همین دسته در فروشگاه دسته‌بندی می‌شود؛ بعد از ثبت، همین دسته باز می‌شود."
-            : "Your product is filed under this category in the shop — it opens right after the upload."
+          autoPublish === false
+            ? fa
+              ? "اثر شما پس از تأیید مدیر، زیر همین دسته در فروشگاه نمایش داده می‌شود."
+              : "Once an admin approves it, your work appears under this category in the shop."
+            : autoPublish
+              ? fa
+                ? "اثر شما پس از آپلود کامل همه‌ی فایل‌ها، زیر همین دسته در فروشگاه منتشر می‌شود و همین دسته برایتان باز می‌شود."
+                : "Once every file has arrived, your work is published under this category in the shop — and the category opens for you."
+              : fa
+                ? "اثر شما زیر همین دسته در فروشگاه دسته‌بندی می‌شود."
+                : "Your work is filed under this category in the shop."
         }
       >
         <div
@@ -764,17 +997,23 @@ export function MasterUploader({ onUploaded }: { onUploaded?: () => void }) {
                   <span className="truncate">
                     {(item.colourwayName[locale] ?? item.colourwayName.fa) + " · " + formatLabel(item.formatId, locale)}
                   </span>
-                  <span className="ms-auto shrink-0 text-muted">
+                  <span
+                    className={cn(
+                      "ms-auto shrink-0",
+                      slot?.state === "done" ? "text-success" : slot?.state === "error" ? "text-error" : "text-muted",
+                    )}
+                    title={slot?.error}
+                  >
                     {slot?.state === "done"
                       ? fa
-                        ? "ذخیره شد"
-                        : "stored"
+                        ? "کامل رسید ✓"
+                        : "arrived intact ✓"
                       : slot?.state === "uploading"
-                        ? `${faNum(slot.percent)}٪`
+                        ? slot.note ?? `${faNum(slot.percent)}٪`
                         : slot?.state === "error"
                           ? fa
-                            ? "خطا"
-                            : "error"
+                            ? "ناموفق"
+                            : "failed"
                           : fa
                             ? "در صف"
                             : "queued"}
@@ -798,83 +1037,180 @@ export function MasterUploader({ onUploaded }: { onUploaded?: () => void }) {
         </div>
       )}
 
-      {phase === "done" && result?.asset && (
-        <div className="rounded-xl border border-success/40 bg-success/5 p-4 text-sm">
-          <p className="flex items-center gap-2 font-medium text-success">
-            <CheckCircle2 className="h-4 w-4" />
-            {fa
-              ? `${faNum(uploadedFiles)} فایل در ${faNum(queuedColourwayCount(queue))} رنگ ثبت شد و در صف بازبینی است.`
-              : `${uploadedFiles} file(s) across ${queuedColourwayCount(queue)} colour(s) uploaded — now in the review queue.`}
+      {phase === "done" && result && (
+        <div
+          className={cn(
+            "rounded-xl border p-4 text-sm",
+            result.published ? "border-success/40 bg-success/5" : "border-accent/40 bg-accent/5",
+          )}
+          role="status"
+        >
+          <p className={cn("flex items-center gap-2 font-medium", result.published ? "text-success" : "text-accent")}>
+            {result.published ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <Clock3 className="h-4 w-4 shrink-0" />}
+            {result.published
+              ? fa
+                ? "اثر شما کامل آپلود شد و در فروشگاه منتشر شد."
+                : "Your work is fully uploaded and live in the shop."
+              : result.reason === "suspicious_file"
+                ? fa
+                  ? "همه‌ی فایل‌ها کامل رسید، اما اسکنر امنیتی یکی از آن‌ها را مشکوک دانست؛ اثر تا بررسی مدیر خصوصی می‌ماند."
+                  : "Every file arrived, but the security scanner flagged one — the work stays private until an admin checks it."
+                : result.reason === "hidden_by_admin"
+                  ? fa
+                    ? "همه‌ی فایل‌ها کامل رسید. این اثر را مدیر پنهان کرده و تا تصمیم او منتشر نمی‌شود."
+                    : "Every file arrived. An admin has hidden this work, so it stays unpublished."
+                  : result.reason === "rejected"
+                    ? fa
+                      ? "همه‌ی فایل‌ها کامل رسید، اما این اثر قبلاً رد شده است."
+                      : "Every file arrived, but this work was rejected earlier."
+                    : fa
+                      ? "همه‌ی فایل‌ها کامل رسید و تأیید شد؛ اثر در صف بازبینی مدیر است."
+                      : "Every file arrived and was verified — the work is in the admin's review queue."}
           </p>
           <ul className="mt-2 space-y-1 text-caption text-foreground-secondary">
             <li>
+              {fa
+                ? /* ⁦…⁩ isolates the LTR size so it does not read “MB 6.9” in RTL */
+                  `${faNum(result.verified.files)} فایل در ${faNum(queuedColourwayCount(queue))} رنگ (\u2066${fileSize(result.verified.bytes)}\u2069) — حجم و چک‌سام همه با فایل‌های شما تطبیق داده شد.`
+                : `${result.verified.files} file(s) in ${queuedColourwayCount(queue)} colour(s) (${fileSize(result.verified.bytes)}) — every size and checksum matched your files.`}
+            </li>
+            <li>
               {fa ? "کد اثر" : "Asset"}: <span dir="ltr">{result.asset.id}</span>
             </li>
-            {chosenFamily && (
+            {(result.family ?? chosenFamily) && (
               <li>
                 {fa ? "دسته‌بندی" : "Category"}:{" "}
-                <span className="font-medium text-foreground">{chosenFamily.name[locale] ?? chosenFamily.name.fa}</span>
+                <span className="font-medium text-foreground">
+                  {(result.family ?? chosenFamily)!.name[locale] ?? (result.family ?? chosenFamily)!.name.fa}
+                </span>
               </li>
             )}
             <li>
-              {fa ? "فرمت‌های ثبت‌شده: " : "Formats: "}
+              {fa ? "فرمت‌ها: " : "Formats: "}
               {formatsPresent.map((id) => formatLabel(id, locale)).join(" · ")}
             </li>
             <li>
-              {fa
-                ? "پس از تأیید مدیر، اثر با همین رنگ‌ها و فرمت‌ها در فروشگاه عرضه می‌شود و خریدار همهٔ فایل‌ها را از پنل خود دانلود می‌کند."
-                : "Once an admin approves it, the work goes on sale with exactly these colours and formats, and every file is downloadable from the buyer's account."}
+              {result.published
+                ? fa
+                  ? "خریداران اکنون اثر را با همین رنگ‌ها و فرمت‌ها می‌بینند و پس از خرید همه‌ی فایل‌ها را از پنل خود دانلود می‌کنند."
+                  : "Buyers now see the work with exactly these colours and formats, and download every file from their account after purchase."
+                : fa
+                  ? "پس از تأیید مدیر، اثر زیر همین دسته در فروشگاه نمایش داده می‌شود؛ وضعیت آن را در «آثار من» ببینید."
+                  : "Once an admin approves it, the work appears under this category in the shop — follow it in “My works”."}
             </li>
           </ul>
 
-          {categoryHref && (
-            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-success/20 pt-3">
+          <div
+            className={cn(
+              "mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t pt-3",
+              result.published ? "border-success/20" : "border-accent/20",
+            )}
+          >
+            {workHref && (
+              <Link
+                href={workHref}
+                className="inline-flex items-center gap-1 rounded-full bg-foreground px-3 py-1.5 text-caption font-semibold text-background"
+              >
+                {fa ? "مشاهده‌ی اثر در فروشگاه" : "View the work in the shop"}
+              </Link>
+            )}
+            {categoryHref && (
               <Link
                 href={categoryHref}
                 className="inline-flex items-center gap-1 text-caption font-semibold text-foreground underline-offset-4 hover:text-accent hover:underline"
               >
-                {fa ? "مشاهده دسته‌بندی در فروشگاه" : "Open the category in the shop"}
+                {fa
+                  ? `مشاهده در دسته‌ی «${result.family?.name.fa ?? chosenFamily?.name.fa ?? ""}»`
+                  : `See it in “${result.family?.name.en ?? chosenFamily?.name.en ?? ""}”`}
               </Link>
-              <span className="text-caption text-foreground-secondary">
-                {redirectIn === null
-                  ? fa
-                    ? "به‌زودی به همین دسته منتقل می‌شوید."
-                    : "Taking you to this category in a moment."
-                  : fa
-                    ? `انتقال خودکار به دسته‌بندی در ${faNum(redirectIn)} ثانیه…`
-                    : `Opening the category in ${redirectIn}s…`}
-              </span>
-            </div>
+            )}
+            {!result.published && onViewWorks && (
+              <button
+                type="button"
+                onClick={onViewWorks}
+                className="rounded-full border border-border px-3 py-1.5 text-caption font-semibold text-foreground"
+              >
+                {fa ? "مشاهده در «آثار من»" : "Open “My works”"}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={startAnother}
+              className="inline-flex items-center gap-1 rounded-full border border-border px-3 py-1.5 text-caption text-foreground"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {fa ? "آپلود اثر دیگر" : "Upload another work"}
+            </button>
+          </div>
+
+          {categoryHref && autoRedirect && redirectIn !== null && (
+            <p className="mt-2 text-caption text-foreground-secondary">
+              {fa
+                ? `انتقال خودکار به دسته‌بندی در ${faNum(redirectIn)} ثانیه… `
+                : `Opening the category in ${redirectIn}s… `}
+              <button type="button" onClick={() => setAutoRedirect(false)} className="underline underline-offset-4">
+                {fa ? "ماندن در همین صفحه" : "Stay here"}
+              </button>
+            </p>
           )}
         </div>
       )}
 
       {phase === "error" && (
-        <p className="flex items-center gap-2 rounded-xl bg-error/10 p-4 text-caption text-error">
-          <AlertTriangle className="h-4 w-4" />
-          {status}
-        </p>
+        <div className="rounded-xl bg-error/10 p-4 text-caption text-error" role="alert">
+          <p className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{status}</span>
+          </p>
+          {problems.length > 0 && (
+            <ul className="mt-2 list-disc space-y-0.5 ps-8">
+              {problems.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
 
-      <button
-        type="button"
-        disabled={!ready || busy}
-        onClick={() => void uploadAll()}
-        className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 py-3 text-sm text-background disabled:opacity-50"
-      >
-        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-        {busy
-          ? fa
-            ? "در حال بارگذاری امن…"
-            : "Uploading securely…"
-          : attached.length > 1
+      {phase !== "done" && (
+        <button
+          type="button"
+          disabled={!ready || busy}
+          onClick={() => void uploadAll()}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 py-3 text-sm text-background disabled:opacity-50"
+        >
+          {busy ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : resumable ? (
+            <RotateCcw className="h-4 w-4" />
+          ) : (
+            <ShieldCheck className="h-4 w-4" />
+          )}
+          {busy
             ? fa
-              ? `بارگذاری امن ${faNum(attached.length)} فایل و ارسال برای بازبینی`
-              : `Upload ${attached.length} files securely & submit for review`
-            : fa
-              ? "بارگذاری امن و ارسال برای بازبینی"
-              : "Upload securely & submit for review"}
-      </button>
+              ? "در حال بارگذاری امن…"
+              : "Uploading securely…"
+            : resumable
+              ? fa
+                ? `ادامه‌ی آپلود (${faNum(remainingFiles)} فایل باقی‌مانده)`
+                : `Resume upload (${remainingFiles} file(s) left)`
+              : autoPublish === false
+                ? attached.length > 1
+                  ? fa
+                    ? `بارگذاری امن ${faNum(attached.length)} فایل و ارسال برای بازبینی`
+                    : `Upload ${attached.length} files securely & submit for review`
+                  : fa
+                    ? "بارگذاری امن و ارسال برای بازبینی"
+                    : "Upload securely & submit for review"
+                : attached.length > 1
+                  ? fa
+                    ? `بارگذاری امن ${faNum(attached.length)} فایل و انتشار در فروشگاه`
+                    : `Upload ${attached.length} files securely & publish`
+                  : fa
+                    ? "بارگذاری امن و انتشار در فروشگاه"
+                    : "Upload securely & publish"}
+        </button>
+      )}
 
       {missing && !busy && (
         <p className="text-center text-caption text-muted">

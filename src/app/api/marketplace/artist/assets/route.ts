@@ -1,4 +1,4 @@
-import { getAssets, getUploadSessions, saveAsset, updateAssetTiers } from "@/lib/marketplace/assets";
+import { getAssets, getSettings, getUploadSessions, saveAsset, updateAssetTiers } from "@/lib/marketplace/assets";
 import { assetColourways, assetFormatIds, deliveryBytes } from "@/lib/marketplace/colourways";
 import { getLicensesForArtist } from "@/lib/marketplace/orders";
 import { fail, json, readJson, requireArtistOrAdmin } from "@/lib/marketplace/guard";
@@ -17,7 +17,12 @@ export async function GET() {
   if ("response" in auth) return auth.response;
 
   const artistId = auth.user.artistId;
-  const [assets, sessions, licenses] = await Promise.all([getAssets(), getUploadSessions(), getLicensesForArtist(artistId ?? "").catch(() => [])]);
+  const [assets, sessions, licenses, settings] = await Promise.all([
+    getAssets(),
+    getUploadSessions(),
+    getLicensesForArtist(artistId ?? "").catch(() => []),
+    getSettings(),
+  ]);
 
   const mine = assets.filter((asset) => asset.ownerUserId === auth.user.id || (artistId && asset.artistId === artistId));
   const revenueByAsset = new Map<string, { fa: number; en: number; sales: number }>();
@@ -34,6 +39,8 @@ export async function GET() {
     ok: true,
     role: auth.user.role,
     artistId: artistId ?? null,
+    /* What happens after an upload completes — the uploader words its promises by it. */
+    policy: { autoPublish: settings.autoPublishUploads, autoApproveSeamless: settings.autoApproveSeamless },
     assets: mine.map((asset) => ({
       id: asset.id,
       slug: asset.slug,
@@ -44,6 +51,7 @@ export async function GET() {
       familyId: asset.familyId ?? null,
       status: asset.status,
       visibility: asset.visibility,
+      uploadState: asset.uploadState ?? "complete",
       createdAt: asset.createdAt,
       updatedAt: asset.updatedAt,
       review: asset.review,

@@ -56,7 +56,8 @@ export async function GET(request: Request) {
 /**
  * POST /api/marketplace/admin
  *
- * settings  → platform knobs (VAT, artist share, affiliate percent, payout floor)
+ * settings  → platform knobs (VAT, artist share, affiliate percent, payout floor,
+ *              publish artist uploads immediately vs. review first)
  * retry-mail → re-send one queued e-mail from the outbox
  */
 export async function POST(request: Request) {
@@ -72,6 +73,7 @@ export async function POST(request: Request) {
       affiliateDiscountPct?: number;
       payoutMinimumFa?: number;
       payoutMinimumEn?: number;
+      autoPublishUploads?: boolean;
       autoApproveSeamless?: boolean;
       emailOnSale?: boolean;
     };
@@ -87,8 +89,9 @@ export async function POST(request: Request) {
       ...(patch.affiliateDiscountPct !== undefined ? { affiliateDiscountPct: clamp(patch.affiliateDiscountPct, 0, 80) } : {}),
       ...(patch.payoutMinimumFa !== undefined ? { payoutMinimumFa: Math.max(0, patch.payoutMinimumFa) } : {}),
       ...(patch.payoutMinimumEn !== undefined ? { payoutMinimumEn: Math.max(0, patch.payoutMinimumEn) } : {}),
-      ...(patch.autoApproveSeamless !== undefined ? { autoApproveSeamless: patch.autoApproveSeamless } : {}),
-      ...(patch.emailOnSale !== undefined ? { emailOnSale: patch.emailOnSale } : {}),
+      ...(typeof patch.autoPublishUploads === "boolean" ? { autoPublishUploads: patch.autoPublishUploads } : {}),
+      ...(typeof patch.autoApproveSeamless === "boolean" ? { autoApproveSeamless: patch.autoApproveSeamless } : {}),
+      ...(typeof patch.emailOnSale === "boolean" ? { emailOnSale: patch.emailOnSale } : {}),
     });
     return json({ ok: true, settings });
   }

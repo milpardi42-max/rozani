@@ -85,6 +85,7 @@ interface StatusPayload {
     affiliateDiscountPct: number;
     payoutMinimumFa: number;
     payoutMinimumEn: number;
+    autoPublishUploads: boolean;
     autoApproveSeamless: boolean;
     emailOnSale: boolean;
   };
@@ -423,6 +424,8 @@ export function AdminConsole({ locale }: { locale: "fa" | "en" }) {
                       fill
                       sizes="160px"
                       className="object-cover"
+                      /* queued works are private: the optimizer has no admin cookie */
+                      unoptimized
                     />
                   )}
                 </div>
@@ -808,6 +811,42 @@ export function AdminConsole({ locale }: { locale: "fa" | "en" }) {
 
       {view === "settings" && settings && (
         <section className="mt-6 max-w-2xl space-y-4 rounded-2xl border border-border p-6">
+          <fieldset className="space-y-3 rounded-xl border border-border p-4">
+            <legend className="px-1 text-sm font-medium">{fa ? "انتشار آثار هنرمندان" : "Publishing artist works"}</legend>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={settings.autoPublishUploads}
+                onChange={(event) => setSettings({ ...settings, autoPublishUploads: event.target.checked })}
+              />
+              <span>
+                {fa ? "انتشار فوری پس از آپلود کامل" : "Publish as soon as the upload is complete"}
+                <span className="mt-1 block text-caption text-foreground-secondary">
+                  {fa
+                    ? "روشن: اثر بلافاصله پس از اینکه همه‌ی فایل‌هایش کامل و سالم به سرور رسید (اندازه و چک‌سام بررسی می‌شود) در فروشگاه و زیر دسته‌ی انتخابی هنرمند منتشر می‌شود؛ شما هر زمان می‌توانید آن را پنهان یا رد کنید. خاموش: هر اثر تازه تا تأیید شما در صف بازبینی می‌ماند. فایلی که اسکنر مشکوک تشخیص دهد همیشه منتظر تأیید شما می‌ماند."
+                    : "On: a work goes live in the shop, under the artist's category, the moment every file has arrived whole (sizes and checksums verified); you can still hide or reject it at any time. Off: every new work waits in the review queue. A file the scanner flags always waits for you."}
+                </span>
+              </span>
+            </label>
+            <label className={`flex items-start gap-2 text-sm ${settings.autoPublishUploads ? "opacity-60" : ""}`}>
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={settings.autoApproveSeamless}
+                disabled={settings.autoPublishUploads}
+                onChange={(event) => setSettings({ ...settings, autoApproveSeamless: event.target.checked })}
+              />
+              <span>
+                {fa ? "در حالت بازبینی، طرح‌های بی‌درز خودکار تأیید شوند" : "In review mode, auto-approve seamless patterns"}
+                <span className="mt-1 block text-caption text-foreground-secondary">
+                  {fa
+                    ? "فقط وقتی انتشار فوری خاموش است اثر دارد: اثری که کاشی آن بی‌درز تشخیص داده شود بدون انتظار منتشر می‌شود."
+                    : "Only applies while immediate publishing is off: works whose tile is detected as seamless skip the queue."}
+                </span>
+              </span>
+            </label>
+          </fieldset>
           <NumberField
             label={fa ? "مالیات بر ارزش افزوده (٪)" : "VAT (%)"}
             value={settings.vatPct}

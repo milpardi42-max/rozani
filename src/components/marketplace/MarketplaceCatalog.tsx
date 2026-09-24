@@ -186,8 +186,8 @@ export function MarketplaceCatalog({ locale, initial }: Props) {
           <p className="mt-3 font-medium">{fa ? "هنوز اثری منتشر نشده است" : "No works published yet"}</p>
           <p className="mt-1 text-caption text-foreground-secondary">
             {fa
-              ? "هنرمندان می‌توانند فایل مادر خود را از پنل هنرمند ارسال کنند تا پس از بازبینی منتشر شود."
-              : "Artists can submit a master file from the artist studio; it goes live after review."}
+              ? "هنرمندان می‌توانند فایل مادر خود را از پنل هنرمند ارسال کنند؛ آثار منتشرشده همین‌جا و در دسته‌ی خودشان در فروشگاه نمایش داده می‌شوند."
+              : "Artists can submit a master file from the artist studio; published works appear here and in their shop category."}
           </p>
           <Link href={href(locale, "/artist/marketplace")} className="mt-5 inline-flex rounded-full border border-border px-4 py-2 text-sm">
             {fa ? "میز کار هنرمند" : "Artist studio"}

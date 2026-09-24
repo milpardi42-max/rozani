@@ -27,10 +27,26 @@ export const LOCAL_PRIVATE_DIR = ["data", "private"];
 export const LOCAL_DERIVED_DIR = ["data", "derived"];
 export const LOCAL_STAGING_DIR = ["data", "private", "staging"];
 
-/** Files ≥ this size switch to multipart upload. */
+/** Files ≥ this size switch to multipart upload (explicit setting, or the S3 default). */
 export const MULTIPART_THRESHOLD_BYTES = Number(process.env.MARKETPLACE_MULTIPART_THRESHOLD_MB ?? 200) * 1024 * 1024;
 /** Chunk size used for multipart sessions (S3 requires ≥ 5 MiB). */
 export const MULTIPART_PART_SIZE = Math.max(5 * 1024 * 1024, Number(process.env.MARKETPLACE_PART_SIZE_MB ?? 8) * 1024 * 1024);
+
+/**
+ * The threshold that actually applies to a new upload session.
+ *
+ * On the local backend every chunk travels through the app, so anything larger
+ * than one part is sent in verified, individually retried chunks — a dropped
+ * connection costs one part instead of the whole file, and no request body grows
+ * past what reverse proxies accept. S3 keeps the 200 MB default: its chunks are
+ * PUT straight to the bucket, which needs a CORS rule on the bucket.
+ * An explicit `MARKETPLACE_MULTIPART_THRESHOLD_MB` always wins.
+ */
+export function multipartThresholdFor(provider: StorageProvider): number {
+  const configured = process.env.MARKETPLACE_MULTIPART_THRESHOLD_MB;
+  if (configured !== undefined && configured.trim() !== "") return MULTIPART_THRESHOLD_BYTES;
+  return provider === "local" ? MULTIPART_PART_SIZE : MULTIPART_THRESHOLD_BYTES;
+}
 /** Hard cap for a single master upload. */
 export const MAX_MASTER_BYTES = Number(process.env.MARKETPLACE_MAX_MASTER_MB ?? 2048) * 1024 * 1024;
 
@@ -322,7 +338,7 @@ export async function capabilities(): Promise<MarketplaceCapabilities> {
     },
     multipart: {
       enabled: true,
-      thresholdBytes: MULTIPART_THRESHOLD_BYTES,
+      thresholdBytes: multipartThresholdFor(provider),
       partSize: MULTIPART_PART_SIZE,
       note:
         provider === "s3"
